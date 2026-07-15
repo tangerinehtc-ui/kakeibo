@@ -124,6 +124,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 
 <script>
 "use strict";
+const APP_VERSION = "2026.07.15-1";
 const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
 const uid = () => Math.random().toString(36).slice(2,9);
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
@@ -1292,6 +1293,12 @@ function renderSettings(){
     <button class="btn" id="syncBtn">今すぐ同期</button>
     <span class="mini" id="syncStatus" style="margin-left:10px">${window.__syncMsg||""}</span>
     <p class="mini" style="margin-top:10px">同期は「変更があってから数秒後」に自動でも実行されます。ライフプランの前提と家計簿の明細が同期対象です。</p>
+  </div>
+  <div class="card">
+    <h2>アプリの情報</h2>
+    <p class="hint">バージョン: <b>${APP_VERSION}</b>　／　表示中のアドレス: <span class="mini">${location.origin+location.pathname}</span></p>
+    <button class="btn ghost sm" id="forceUpd">最新版を確認して更新</button>
+    <p class="mini" style="margin-top:8px">通常は新しい版が公開されると自動で検知し、画面上部に更新バーが出ます。反映されない時はこのボタンを押してください。</p>
   </div>`;
   // --- 支出目標 ---
   document.getElementById("bdgAmt").onchange=e=>{ S.kakeibo.budget.monthly=Math.max(0,+e.target.value||0); commit(); };
@@ -1403,6 +1410,16 @@ function renderSettings(){
     try{ const c=await getClient(); if(c) await c.auth.signOut(); notify("ログアウトしました"); updateAuthUI(); }catch(e){}
   };
   document.getElementById("syncBtn").onclick=()=>syncNow(false);
+  document.getElementById("forceUpd").onclick=async()=>{
+    try{
+      if("serviceWorker" in navigator){
+        const regs=await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r=>r.unregister()));
+      }
+      if(window.caches){ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.delete(k))); }
+    }catch(e){}
+    location.replace(location.pathname+"?u="+Date.now());
+  };
   updateAuthUI();
 }
 function val(id){ return document.getElementById(id).value.trim(); }
@@ -1506,8 +1523,27 @@ ensureKakeibo();   // 既存ユーザーのデータに家計簿設定を補完
 applyFixed();      // 起動時に、当月ぶんまでの固定費を計上
 render();
 // PWA（https配信時のみ有効。file://では静かにスキップ）
+function showUpdateBar(){
+  if(document.getElementById("updBar")) return;
+  const bar=document.createElement("div");
+  bar.id="updBar";
+  bar.style.cssText="background:var(--accent);color:#fff;padding:9px 16px;font-size:13px;text-align:center;cursor:pointer";
+  bar.innerHTML='新しいバージョンがあります。<b style="text-decoration:underline">ここをタップして更新</b>';
+  bar.onclick=()=>location.reload();
+  document.body.insertBefore(bar, document.body.firstChild);
+}
 if("serviceWorker" in navigator && /^https?:$/.test(location.protocol)){
-  navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  navigator.serviceWorker.register("./sw.js",{updateViaCache:"none"}).then(reg=>{
+    reg.addEventListener("updatefound",()=>{
+      const nw=reg.installing; if(!nw) return;
+      nw.addEventListener("statechange",()=>{
+        // 既に別のSWが動いている＝更新版が入った、初回インストールではない
+        if(nw.state==="installed" && navigator.serviceWorker.controller) showUpdateBar();
+      });
+    });
+    reg.update().catch(()=>{});
+    setInterval(()=>reg.update().catch(()=>{}), 60*60*1000);
+  }).catch(()=>{});
 }
 // 起動時に一度同期（Supabase設定済み・ログイン済みの場合のみ動く）
 if(CFG.url && CFG.anonKey && navigator.onLine) syncNow(true);
