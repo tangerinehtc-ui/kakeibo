@@ -83,6 +83,19 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 .catbar .bar{height:9px;border-radius:5px;background:var(--accent2);min-width:2px}
 .monthnav{display:flex;align-items:center;gap:12px;margin-bottom:12px}
 .monthnav b{font-size:17px;min-width:120px;text-align:center}
+.pbar{background:var(--chip);border-radius:6px;height:12px;margin-top:8px;overflow:hidden}
+.pbar>div{height:100%;border-radius:6px}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.cal-h{text-align:center;font-size:12px;color:var(--sub);padding:3px 0}
+.cal-h.sun,.cal-d.sun{color:var(--neg)}
+.cal-h.sat,.cal-d.sat{color:var(--accent2)}
+.cal-cell{min-height:58px;border:1px solid var(--line);border-radius:6px;padding:3px;font-size:11px;cursor:pointer;background:var(--bg);overflow:hidden}
+.cal-cell.empty{border:none;background:transparent;cursor:default}
+.cal-cell.today{background:var(--chip)}
+.cal-cell.sel{border:2px solid var(--accent);padding:2px}
+.cal-d{font-size:12px;color:var(--sub);line-height:1.3}
+.cal-e{color:var(--neg);font-weight:600;line-height:1.3;white-space:nowrap}
+.cal-i{color:var(--pos);font-weight:600;line-height:1.3;white-space:nowrap}
 @media(max-width:600px){ main{padding:10px} .card{padding:12px} }
 </style>
 </head>
@@ -774,8 +787,23 @@ function stackedExpense(rows){
 
 /* ========== 家計簿（実績）データ ========== */
 const EKEY="kakeibo_entries_v1", CKEY="kakeibo_config_v1";
-const EXP_CATS=["食費","水道・光熱費","家具・日用雑貨","被服費","医療費","通信・交通費","教養・娯楽費","こづかい","交際費","その他雑費","住宅","車両","教育","保険","特別支出"];
-const INC_CATS=["給与","賞与","児童手当","その他"];
+// living=true のカテゴリがライフプランの「生活費」と対応する
+const DEF_EXP=[["食費",1],["水道・光熱費",1],["家具・日用雑貨",1],["被服費",1],["医療費",1],["通信・交通費",1],["教養・娯楽費",1],["こづかい",1],["交際費",1],["その他雑費",1],["住宅",0],["車両",0],["教育",0],["保険",0],["特別支出",0]];
+const DEF_INC=["給与","賞与","児童手当","その他"];
+function ensureKakeibo(){
+  if(!S.kakeibo||typeof S.kakeibo!=="object") S.kakeibo={};
+  const k=S.kakeibo;
+  if(!k.cats||typeof k.cats!=="object") k.cats={};
+  if(!Array.isArray(k.cats.expense)||!k.cats.expense.length) k.cats.expense=DEF_EXP.map(([name,living])=>({name,living:!!living}));
+  if(!Array.isArray(k.cats.income)||!k.cats.income.length) k.cats.income=DEF_INC.map(name=>({name}));
+  if(!Array.isArray(k.fixed)) k.fixed=[];
+  if(!k.budget||typeof k.budget!=="object") k.budget={monthly:0,scope:"living"};
+  if(!k.budget.scope) k.budget.scope="living";
+}
+function expCats(){ return S.kakeibo.cats.expense.map(c=>c.name); }
+function incCats(){ return S.kakeibo.cats.income.map(c=>c.name); }
+function catsFor(kind){ return kind==="income"?incCats():expCats(); }
+function livingSet(){ return new Set(S.kakeibo.cats.expense.filter(c=>c.living).map(c=>c.name)); }
 let E=(function(){ try{const r=localStorage.getItem(EKEY); if(r) return JSON.parse(r);}catch(e){} return []; })();
 let CFG=(function(){ try{const r=localStorage.getItem(CKEY); if(r) return JSON.parse(r);}catch(e){} return {url:"",anonKey:"",lastSyncAt:null}; })();
 function saveEntries(){
@@ -787,24 +815,77 @@ function saveCfg(){ try{ localStorage.setItem(CKEY, JSON.stringify(CFG)); }catch
 const YEN=v=>Math.round(v).toLocaleString("ja-JP");
 function newId(){ return (crypto.randomUUID)?crypto.randomUUID():uid()+"-"+Date.now().toString(36); }
 function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function daysInMonth(y,m){ return new Date(y,m,0).getDate(); }
+function ymIndex(ym){ const [y,m]=ym.split("-").map(Number); return y*12+(m-1); }
+function ymFromIndex(i){ return Math.floor(i/12)+"-"+String(i%12+1).padStart(2,"0"); }
+
+/* ---------- 固定費・定期収入の自動計上 ---------- */
+// idを「固定費ID+年月」から決定的に作るので、複数端末で生成しても重複しない
+function applyFixed(){
+  ensureKakeibo();
+  const today=todayStr(), nowYM=today.slice(0,7);
+  let added=false;
+  S.kakeibo.fixed.forEach(f=>{
+    if(!f.active||!f.startYM||!(f.amount>0)||!f.category) return;
+    const every=Math.max(1,+f.everyMonths||1);
+    const startI=ymIndex(f.startYM);
+    let endI=ymIndex(nowYM);
+    if(f.endYM && ymIndex(f.endYM)<endI) endI=ymIndex(f.endYM);
+    for(let i=startI;i<=endI;i+=every){
+      const ym=ymFromIndex(i);
+      const [y,m]=ym.split("-").map(Number);
+      const day=Math.min(Math.max(1,+f.day||1), daysInMonth(y,m));
+      const date=ym+"-"+String(day).padStart(2,"0");
+      if(date>today) continue; // 未来日はまだ計上しない
+      const id="fx_"+f.id+"_"+ym;
+      if(E.some(x=>x.id===id)) continue; // 生成済み（削除済みも含む＝復活させない）
+      E.push({id,date,kind:f.kind,category:f.category,amount:Math.round(f.amount),memo:f.name,deleted:false,updated_at:new Date().toISOString(),dirty:true,fixedId:f.id});
+      added=true;
+    }
+  });
+  if(added) saveEntries();
+  return added;
+}
 
 /* ---------- 家計簿タブ ---------- */
-let kMonth=todayStr().slice(0,7), kKind="expense", kCat=EXP_CATS[0];
+let kMonth=todayStr().slice(0,7), kKind="expense", kCat="", kView="list", kSelDay=null;
 function shiftMonth(d){ const [y,m]=kMonth.split("-").map(Number); const dt=new Date(y,m-1+d,1); kMonth=dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0"); render(); }
+function calendarHtml(list){
+  const [y,m]=kMonth.split("-").map(Number);
+  const lead=new Date(y,m-1,1).getDay(), dim=daysInMonth(y,m);
+  const byDay={};
+  list.forEach(x=>{ const d=+x.date.slice(8,10); if(!byDay[d]) byDay[d]={i:0,e:0};
+    if(x.kind==="income") byDay[d].i+=x.amount; else byDay[d].e+=x.amount; });
+  let cells="";
+  for(let i=0;i<lead;i++) cells+=`<div class="cal-cell empty"></div>`;
+  for(let d=1;d<=dim;d++){
+    const v=byDay[d]||{i:0,e:0};
+    const date=kMonth+"-"+String(d).padStart(2,"0");
+    const dow=new Date(y,m-1,d).getDay();
+    cells+=`<div class="cal-cell${kSelDay===date?" sel":""}${date===todayStr()?" today":""}" data-day="${date}">
+      <div class="cal-d${dow===0?" sun":dow===6?" sat":""}">${d}</div>
+      ${v.e?`<div class="cal-e">-${YEN(v.e)}</div>`:""}
+      ${v.i?`<div class="cal-i">+${YEN(v.i)}</div>`:""}</div>`;
+  }
+  return `<div class="cal">${["日","月","火","水","木","金","土"].map((w,i)=>`<div class="cal-h${i===0?" sun":i===6?" sat":""}">${w}</div>`).join("")}${cells}</div>
+    <p class="mini" style="margin-top:8px">${kSelDay?`${+kSelDay.slice(8,10)}日を選択中（下の明細がその日だけになります）　<button class="btn ghost sm" id="calClear">選択解除</button>`:"日付をタップすると、その日の明細だけを表示します"}</p>`;
+}
 function renderKakeibo(){
+  applyFixed();
+  ensureKakeibo();
   const el=document.getElementById("tab-kakeibo");
-  const list=E.filter(x=>!x.deleted && x.date && x.date.startsWith(kMonth)).sort((a,b)=>b.date.localeCompare(a.date)||(b.updated_at||"").localeCompare(a.updated_at||""));
-  const inc=list.filter(x=>x.kind==="income").reduce((s,x)=>s+x.amount,0);
-  const exp=list.filter(x=>x.kind==="expense").reduce((s,x)=>s+x.amount,0);
+  const monthList=E.filter(x=>!x.deleted && x.date && x.date.startsWith(kMonth));
+  const list=(kSelDay?monthList.filter(x=>x.date===kSelDay):monthList)
+    .slice().sort((a,b)=>b.date.localeCompare(a.date)||(b.updated_at||"").localeCompare(a.updated_at||""));
+  const inc=monthList.filter(x=>x.kind==="income").reduce((s,x)=>s+x.amount,0);
+  const exp=monthList.filter(x=>x.kind==="expense").reduce((s,x)=>s+x.amount,0);
   const [yy,mm]=kMonth.split("-");
-  // カテゴリ別集計（支出）
   const byCat={};
-  list.filter(x=>x.kind==="expense").forEach(x=>{ byCat[x.category]=(byCat[x.category]||0)+x.amount; });
+  monthList.filter(x=>x.kind==="expense").forEach(x=>{ byCat[x.category]=(byCat[x.category]||0)+x.amount; });
   const cats=Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
   const maxCat=cats.length?cats[0][1]:1;
-  const catList=EXP_CATS.concat(INC_CATS.filter(c=>!EXP_CATS.includes(c)));
-  const useCats=kKind==="expense"?EXP_CATS:INC_CATS;
-  if(!useCats.includes(kCat)) kCat=useCats[0];
+  const useCats=catsFor(kKind);
+  if(!useCats.includes(kCat)) kCat=useCats[0]||"";
   el.innerHTML=`
   <div class="card">
     <div class="monthnav">
@@ -817,7 +898,15 @@ function renderKakeibo(){
       <div class="kpi"><div class="lab">収支</div><div class="val ${inc-exp<0?"warn":""}" style="font-size:19px">${YEN(inc-exp)}<span class="mini"> 円</span></div></div>
     </div>
   </div>
-  ${budgetCard(list)}
+  ${budgetCard(monthList)}
+  ${savingsCard(monthList)}
+  <div class="card">
+    <div class="seg2" style="margin-bottom:10px">
+      <button id="vList" class="${kView==="list"?"on":""}">明細</button>
+      <button id="vCal" class="${kView==="calendar"?"on":""}">カレンダー</button>
+    </div>
+    ${kView==="calendar"?calendarHtml(monthList):`<p class="mini">カレンダーに切り替えると、日ごとの収支が一覧できます。</p>`}
+  </div>
   <div class="card kform">
     <h2>記録する</h2>
     <div class="seg2" style="margin-bottom:10px">
@@ -825,11 +914,12 @@ function renderKakeibo(){
       <button id="kInc" class="${kKind==="income"?"on":""}">収入</button>
     </div>
     <div class="chips" id="kCats" style="margin-bottom:10px">
-      ${useCats.map(c=>`<button class="chip ${c===kCat?"on":""}" data-c="${c}">${c}</button>`).join("")}
+      ${useCats.map(c=>`<button class="chip ${c===kCat?"on":""}" data-c="${c.replace(/"/g,"&quot;")}">${c}</button>`).join("")}
+      <button class="chip" id="kCatAdd" title="カテゴリを追加">＋</button>
     </div>
     <div class="grid" style="grid-template-columns:1fr 1fr;max-width:480px">
       <div><label class="f">金額（円）</label><input type="number" inputmode="numeric" id="kAmt" placeholder="0"></div>
-      <div><label class="f">日付</label><input type="date" id="kDate" value="${todayStr()}"></div>
+      <div><label class="f">日付</label><input type="date" id="kDate" value="${kSelDay||todayStr()}"></div>
     </div>
     <div style="margin-top:8px;max-width:480px"><label class="f">メモ（任意）</label><input type="text" id="kMemo" placeholder="スーパー、ガソリン など"></div>
     <button class="btn" id="kAdd" style="margin-top:12px;width:100%;max-width:480px;padding:11px">追加する</button>
@@ -837,28 +927,45 @@ function renderKakeibo(){
   ${csvCard()}
   ${cats.length?`<div class="card"><h2>カテゴリ別支出</h2>${cats.map(([c,v])=>`<div class="catbar"><span style="width:110px">${c}</span><div class="bar" style="width:${Math.max(2,v/maxCat*55)}%"></div><span class="mini">${YEN(v)}円</span></div>`).join("")}</div>`:""}
   <div class="card">
-    <h2>明細（${list.length}件）</h2>
+    <h2>明細（${list.length}件${kSelDay?` / ${+kSelDay.slice(8,10)}日`:""}）</h2>
     ${list.length?list.map(x=>`
       <div class="entry">
         <span class="mini">${+x.date.slice(8,10)}日</span>
         <span class="cat">${x.category}</span>
-        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(x.memo||"").replace(/</g,"&lt;")}</span>
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(x.memo||"").replace(/</g,"&lt;")}${x.fixedId?' <span class="mini">(固定)</span>':""}</span>
         <span class="amt ${x.kind==="income"?"in":""}">${x.kind==="income"?"+":""}${YEN(x.amount)}円</span>
         <button class="btn danger sm" data-del="${x.id}">×</button>
-      </div>`).join(""):`<p class="mini">この月の記録はまだありません。上のフォームから追加してください。</p>`}
+      </div>`).join(""):`<p class="mini">${kSelDay?"この日の記録はありません。":"この月の記録はまだありません。上のフォームから追加してください。"}</p>`}
   </div>`;
-  document.getElementById("mPrev").onclick=()=>shiftMonth(-1);
-  document.getElementById("mNext").onclick=()=>shiftMonth(1);
+  document.getElementById("mPrev").onclick=()=>{kSelDay=null;shiftMonth(-1);};
+  document.getElementById("mNext").onclick=()=>{kSelDay=null;shiftMonth(1);};
+  document.getElementById("vList").onclick=()=>{kView="list";kSelDay=null;render();};
+  document.getElementById("vCal").onclick=()=>{kView="calendar";render();};
+  el.querySelectorAll(".cal-cell[data-day]").forEach(c=>c.onclick=()=>{
+    kSelDay=(kSelDay===c.dataset.day)?null:c.dataset.day; render();
+  });
+  const cc=document.getElementById("calClear"); if(cc) cc.onclick=e=>{ e.stopPropagation(); kSelDay=null; render(); };
   document.getElementById("kExp").onclick=()=>{kKind="expense";render();};
   document.getElementById("kInc").onclick=()=>{kKind="income";render();};
-  el.querySelectorAll("#kCats .chip").forEach(b=>b.onclick=()=>{kCat=b.dataset.c;render();});
+  el.querySelectorAll("#kCats .chip[data-c]").forEach(b=>b.onclick=()=>{kCat=b.dataset.c;render();});
+  document.getElementById("kCatAdd").onclick=()=>{
+    const n=(prompt(kKind==="expense"?"追加する支出カテゴリ名":"追加する収入カテゴリ名")||"").trim();
+    if(!n) return;
+    if(catsFor(kKind).includes(n)){ alert("同じ名前のカテゴリが既にあります"); return; }
+    if(kKind==="expense"){
+      const living=confirm(`「${n}」を生活費として扱いますか？\n\nOK＝生活費に含める（食費・日用品など毎月の暮らしの費用）\nキャンセル＝含めない（住宅・車・教育など）\n\n※ライフプランの生活費との予実比較や、支出目標の集計対象に影響します`);
+      S.kakeibo.cats.expense.push({name:n,living});
+    } else S.kakeibo.cats.income.push({name:n});
+    kCat=n; commit();
+  };
   document.getElementById("kAdd").onclick=()=>{
     const amt=+document.getElementById("kAmt").value;
     const date=document.getElementById("kDate").value||todayStr();
     const memo=document.getElementById("kMemo").value.trim();
     if(!(amt>0)){ alert("金額を入力してください"); return; }
+    if(!kCat){ alert("カテゴリを選んでください"); return; }
     E.push({id:newId(),date,kind:kKind,category:kCat,amount:Math.round(amt),memo,deleted:false,updated_at:new Date().toISOString(),dirty:true});
-    saveEntries(); kMonth=date.slice(0,7); render();
+    saveEntries(); kMonth=date.slice(0,7); kSelDay=null; render();
   };
   el.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{
     const x=E.find(e=>e.id===b.dataset.del); if(!x) return;
@@ -868,23 +975,67 @@ function renderKakeibo(){
   attachCsvHandlers(el);
 }
 
-/* ---------- 予実チェック ---------- */
-const LIVING_SET=new Set(["食費","水道・光熱費","家具・日用雑貨","被服費","医療費","通信・交通費","教養・娯楽費","こづかい","交際費","その他雑費"]);
-function budgetCard(list){
+/* ---------- 支出目標・貯蓄達成率 ---------- */
+// ライフプランの生活費（その年の本人年齢に対応する月額・円）
+function planLivingMonthly(year){
   const prim=S.members.find(m=>m.role==="self")||S.members[0];
-  if(!prim) return "";
-  const age=(+kMonth.slice(0,4))-prim.birthYear;
+  if(!prim) return 0;
+  const age=year-prim.birthYear;
   const seg=S.living.find(s=>age>=s.from&&age<=s.to);
-  if(!seg||!seg.monthly) return "";
-  const plan=seg.monthly*10000;
-  const actual=list.filter(x=>x.kind==="expense"&&LIVING_SET.has(x.category)).reduce((s,x)=>s+x.amount,0);
-  if(!actual) return "";
-  const pct=Math.round(actual/plan*100);
-  const over=actual>plan;
-  return `<div class="card"><h2>生活費の予実チェック</h2>
-    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap"><b style="font-size:20px">${YEN(actual)}円</b><span class="mini">／ プランの生活費 ${YEN(plan)}円・月（${pct}%）</span></div>
-    <div style="background:var(--chip);border-radius:6px;height:12px;margin-top:8px;overflow:hidden"><div style="height:100%;width:${Math.min(100,pct)}%;background:${over?"var(--neg)":"var(--pos)"}"></div></div>
-    <p class="mini" style="margin-top:6px">${over?"プランの生活費を超えています。毎月続くようなら、支出タブの生活費を実態に合わせるとキャッシュフロー予測が現実に近づきます。":"プランの範囲内です。"}（対象は食費〜その他雑費の生活費カテゴリ。住宅・車両・教育・保険は年単位のためキャッシュフロー表で確認）</p>
+  return seg&&seg.monthly?seg.monthly*10000:0;
+}
+function budgetCard(list){
+  ensureKakeibo();
+  const b=S.kakeibo.budget;
+  const year=+kMonth.slice(0,4);
+  const planLiv=planLivingMonthly(year);
+  const target=(+b.monthly>0)?+b.monthly:planLiv;
+  if(!(target>0)) return "";
+  const LS=livingSet();
+  const scopeLiving=b.scope!=="all";
+  const actual=list.filter(x=>x.kind==="expense"&&(!scopeLiving||LS.has(x.category))).reduce((s,x)=>s+x.amount,0);
+  const pct=Math.round(actual/target*100);
+  const over=actual>target;
+  const color=over?"var(--neg)":(pct>=80?"#BA7517":"var(--pos)");
+  const auto=!(+b.monthly>0);
+  return `<div class="card"><h2>今月の支出目標</h2>
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <b style="font-size:28px;color:${color}">${pct}%</b>
+      <span class="mini">${YEN(actual)}円 / 目標 ${YEN(target)}円</span>
+    </div>
+    <div class="pbar"><div style="width:${Math.min(100,pct)}%;background:${color}"></div></div>
+    <p class="mini" style="margin-top:6px">
+      ${over?`目標を <b style="color:var(--neg)">${YEN(actual-target)}円</b> 超えています`:`残り <b>${YEN(target-actual)}円</b>`}
+      　|　対象: ${scopeLiving?"生活費カテゴリ":"すべての支出"}${auto?"　|　目標額はライフプランの生活費から自動設定":""}
+    </p>
+    ${(scopeLiving&&over&&!auto)?"":""}
+    ${scopeLiving&&planLiv>0?`<p class="mini" style="margin-top:4px;color:var(--sub)">ライフプランの生活費は月 ${YEN(planLiv)}円。実績が毎月これを超えるようなら、支出タブの生活費を実態に合わせるとキャッシュフロー予測が現実に近づきます。</p>`:""}
+  </div>`;
+}
+// ライフプランが想定する「その年に貯めるべき額」に対する達成率
+function savingsCard(list){
+  const year=+kMonth.slice(0,4);
+  let rows; try{ rows=computeCF().rows; }catch(e){ return ""; }
+  const row=rows.find(r=>r.year===year);
+  if(!row) return "";
+  const inc=list.filter(x=>x.kind==="income").reduce((s,x)=>s+x.amount,0);
+  const exp=list.filter(x=>x.kind==="expense").reduce((s,x)=>s+x.amount,0);
+  const actual=inc-exp;
+  const targetMonth=row.balance*10000/12;
+  if(!(targetMonth>0)){
+    return `<div class="card"><h2>貯蓄の達成率</h2>
+      <p class="mini">ライフプラン上、${year}年は年間 ${MAN(row.balance)}万円の想定（貯蓄目標なし）です。今月の収支は <b>${YEN(actual)}円</b>。</p></div>`;
+  }
+  const pct=Math.round(actual/targetMonth*100);
+  const ok=actual>=targetMonth;
+  const color=ok?"var(--pos)":(pct>=60?"#BA7517":"var(--neg)");
+  return `<div class="card"><h2>貯蓄の達成率</h2>
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <b style="font-size:28px;color:${color}">${pct}%</b>
+      <span class="mini">今月の貯蓄 ${YEN(actual)}円 / 目標 ${YEN(targetMonth)}円</span>
+    </div>
+    <div class="pbar"><div style="width:${Math.min(100,Math.max(0,pct))}%;background:${color}"></div></div>
+    <p class="mini" style="margin-top:6px">ライフプランでは${year}年に年間 <b>${MAN(row.balance)}万円</b>（月あたり ${YEN(targetMonth)}円）貯める想定です。${ok?"順調です。":`このペースが続くと、${year}年の貯蓄が計画に届きません。`}</p>
   </div>`;
 }
 
@@ -911,7 +1062,7 @@ let RULES=(function(){ try{const r=localStorage.getItem(RKEY); if(r) return JSON
 function saveRules(){ try{ localStorage.setItem(RKEY, JSON.stringify(RULES)); }catch(e){} }
 function guessCategory(memo,kind){
   const M=(memo||"").toUpperCase();
-  const cats=kind==="income"?INC_CATS:EXP_CATS;
+  const cats=catsFor(kind);
   for(const r of RULES) if(r.kw && cats.includes(r.c) && M.includes(r.kw.toUpperCase())) return r.c;
   for(const r of DEFAULT_RULES) if(cats.includes(r.c) && M.includes(r.kw.toUpperCase())) return r.c;
   return kind==="income"?"その他":"その他雑費";
@@ -1017,7 +1168,7 @@ function csvCard(){
         <td style="text-align:left;max-width:220px;overflow:hidden;text-overflow:ellipsis">${r.memo.replace(/</g,"&lt;")}${r.dup?' <span style="color:var(--warn)">重複?</span>':""}</td>
         <td>${YEN(r.amount)}円</td>
         <td>${r.kind==="income"?"収入":"支出"}</td>
-        <td><select data-cat="${i}">${(r.kind==="income"?INC_CATS:EXP_CATS).map(c=>`<option${c===r.category?" selected":""}>${c}</option>`).join("")}</select></td>
+        <td><select data-cat="${i}">${catsFor(r.kind).map(c=>`<option${c===r.category?" selected":""}>${c}</option>`).join("")}</select></td>
       </tr>`).join("")}
       </tbody></table></div>
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
@@ -1072,9 +1223,47 @@ function attachCsvHandlers(el){
 
 /* ---------- 設定タブ（Supabase同期） ---------- */
 function renderSettings(){
+  ensureKakeibo();
   const el=document.getElementById("tab-settings");
   const dirtyCount=E.filter(x=>x.dirty).length;
+  const b=S.kakeibo.budget;
+  const PERIODS=[[1,"毎月"],[2,"2ヶ月ごと"],[3,"3ヶ月ごと"],[6,"半年ごと"],[12,"毎年"]];
   el.innerHTML=`
+  <div class="card">
+    <h2>支出の月間目標</h2>
+    <p class="hint">家計簿タブに「今月あと何%使えるか」を表示します。0のままにすると、ライフプランの生活費（月額）が自動で目標になります。</p>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));max-width:520px">
+      <div><label class="f">目標額（円/月・0で自動）</label><input type="number" id="bdgAmt" value="${+b.monthly||0}"></div>
+      <div><label class="f">集計の対象</label><select id="bdgScope">
+        <option value="living"${b.scope!=="all"?" selected":""}>生活費カテゴリのみ</option>
+        <option value="all"${b.scope==="all"?" selected":""}>すべての支出</option>
+      </select></div>
+    </div>
+    <p class="mini" style="margin-top:6px">現在の自動目標（ライフプランの生活費）: <b>${YEN(planLivingMonthly(new Date().getFullYear()))}円/月</b></p>
+  </div>
+
+  <div class="card">
+    <h2>固定費・定期収入</h2>
+    <p class="hint">家賃・通信費・保険料・給与など、決まって発生するものを登録すると、毎回入力しなくても自動で計上されます。開始月から指定した周期で、当日を過ぎた分だけ記録されます。</p>
+    <div id="fxList"></div>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn ghost sm" id="fxAddExp">+ 固定費（支出）</button>
+      <button class="btn ghost sm" id="fxAddInc">+ 定期収入</button>
+    </div>
+    <p class="mini" style="margin-top:8px">※ 自動計上された明細は家計簿に「(固定)」と表示されます。個別に削除でき、削除した月は再計上されません。</p>
+  </div>
+
+  <div class="card">
+    <h2>カテゴリ管理</h2>
+    <p class="hint">支出・収入のカテゴリを自由に追加・削除できます。支出の「生活費」にチェックを入れると、ライフプランの生活費との比較や支出目標の集計対象になります（住宅・車・教育などは外すのが目安です）。</p>
+    <div style="font-size:13px;color:var(--sub);margin-bottom:6px"><b>支出カテゴリ</b></div>
+    <div id="catExp"></div>
+    <button class="btn ghost sm addbtn" id="catAddExp">+ 支出カテゴリ</button>
+    <div style="font-size:13px;color:var(--sub);margin:14px 0 6px"><b>収入カテゴリ</b></div>
+    <div id="catInc"></div>
+    <button class="btn ghost sm addbtn" id="catAddInc">+ 収入カテゴリ</button>
+  </div>
+
   <div class="card">
     <h2>データ同期（Supabase）</h2>
     <p class="hint">スマホとPCで同じデータを使うための設定です。未設定でも、この端末内だけで全機能が使えます。設定手順は同梱のREADME.mdを見てください。</p>
@@ -1104,6 +1293,89 @@ function renderSettings(){
     <span class="mini" id="syncStatus" style="margin-left:10px">${window.__syncMsg||""}</span>
     <p class="mini" style="margin-top:10px">同期は「変更があってから数秒後」に自動でも実行されます。ライフプランの前提と家計簿の明細が同期対象です。</p>
   </div>`;
+  // --- 支出目標 ---
+  document.getElementById("bdgAmt").onchange=e=>{ S.kakeibo.budget.monthly=Math.max(0,+e.target.value||0); commit(); };
+  document.getElementById("bdgScope").onchange=e=>{ S.kakeibo.budget.scope=e.target.value; commit(); };
+  // --- 固定費 ---
+  const fl=document.getElementById("fxList");
+  if(!S.kakeibo.fixed.length) fl.innerHTML=`<p class="mini">まだ登録がありません。下のボタンから追加してください。</p>`;
+  S.kakeibo.fixed.forEach(f=>{
+    const d=document.createElement("div"); d.className="itemrow"; d.style.display="block";
+    d.innerHTML=`
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <span class="tag">${f.kind==="income"?"収入":"支出"}</span>
+        <label style="display:flex;gap:5px;align-items:center;font-size:13px;color:var(--sub)"><input type="checkbox" data-k="active" ${f.active?"checked":""} style="width:auto"> 有効</label>
+        <button class="btn danger sm" data-rm style="margin-left:auto">×</button>
+      </div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr))">
+        <div><label class="f">名称</label><input type="text" data-k="name" value="${(f.name||"").replace(/"/g,"&quot;")}"></div>
+        <div><label class="f">カテゴリ</label><select data-k="category">${catsFor(f.kind).map(c=>`<option${c===f.category?" selected":""}>${c}</option>`).join("")}</select></div>
+        <div><label class="f">金額（円）</label><input type="number" data-k="amount" value="${f.amount}"></div>
+        <div><label class="f">周期</label><select data-k="everyMonths">${PERIODS.map(([v,l])=>`<option value="${v}"${+f.everyMonths===v?" selected":""}>${l}</option>`).join("")}</select></div>
+        <div><label class="f">日</label><input type="number" data-k="day" value="${f.day}" min="1" max="31"></div>
+        <div><label class="f">開始月</label><input type="month" data-k="startYM" value="${f.startYM||""}"></div>
+        <div><label class="f">終了月（任意）</label><input type="month" data-k="endYM" value="${f.endYM||""}"></div>
+      </div>`;
+    d.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
+      const k=inp.dataset.k;
+      if(k==="active") f[k]=e.target.checked;
+      else if(k==="name"||k==="category"||k==="startYM"||k==="endYM") f[k]=e.target.value;
+      else f[k]=+e.target.value;
+      commit();
+    });
+    d.querySelector("[data-rm]").onclick=()=>{
+      if(!confirm(`「${f.name}」を削除しますか？\n（すでに計上済みの明細は残ります）`)) return;
+      S.kakeibo.fixed=S.kakeibo.fixed.filter(x=>x!==f); commit();
+    };
+    fl.appendChild(d);
+  });
+  const addFixed=kind=>{
+    const cs=catsFor(kind);
+    S.kakeibo.fixed.push({id:uid(),name:kind==="income"?"給与":"家賃",kind,category:cs[0]||"",amount:0,everyMonths:1,day:25,startYM:todayStr().slice(0,7),endYM:"",active:true});
+    commit();
+  };
+  document.getElementById("fxAddExp").onclick=()=>addFixed("expense");
+  document.getElementById("fxAddInc").onclick=()=>addFixed("income");
+  // --- カテゴリ管理 ---
+  const renderCats=(boxId,arr,isExp)=>{
+    const box=document.getElementById(boxId); box.innerHTML="";
+    arr.forEach(c=>{
+      const r=document.createElement("div"); r.className="seg";
+      r.innerHTML=`<input type="text" value="${(c.name||"").replace(/"/g,"&quot;")}" data-k="name" style="width:150px">
+        ${isExp?`<label style="display:flex;gap:5px;align-items:center;font-size:13px;color:var(--sub)"><input type="checkbox" data-k="living" ${c.living?"checked":""} style="width:auto"> 生活費</label>`:""}
+        <span class="mini">${E.filter(x=>!x.deleted&&x.category===c.name).length}件</span>
+        <button class="btn danger sm">×</button>`;
+      r.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
+        if(inp.dataset.k==="living") c.living=e.target.checked;
+        else{
+          const old=c.name, nn=e.target.value.trim();
+          if(!nn){ e.target.value=old; return; }
+          c.name=nn;
+          E.forEach(x=>{ if(!x.deleted&&x.category===old){ x.category=nn; x.dirty=true; x.updated_at=new Date().toISOString(); } });
+          S.kakeibo.fixed.forEach(f=>{ if(f.category===old) f.category=nn; });
+          saveEntries();
+        }
+        commit();
+      });
+      r.querySelector(".danger").onclick=()=>{
+        const used=E.filter(x=>!x.deleted&&x.category===c.name).length;
+        if(used && !confirm(`「${c.name}」には ${used}件の明細があります。\nカテゴリを削除しても明細は残りますが、分類名はそのまま表示されます。削除しますか？`)) return;
+        if(arr.length<=1){ alert("カテゴリを0件にはできません"); return; }
+        const i=arr.indexOf(c); arr.splice(i,1); commit();
+      };
+      box.appendChild(r);
+    });
+  };
+  renderCats("catExp",S.kakeibo.cats.expense,true);
+  renderCats("catInc",S.kakeibo.cats.income,false);
+  const addCat=(arr,isExp)=>{
+    const n=(prompt(isExp?"支出カテゴリ名":"収入カテゴリ名")||"").trim(); if(!n) return;
+    if(arr.some(c=>c.name===n)){ alert("同じ名前のカテゴリが既にあります"); return; }
+    arr.push(isExp?{name:n,living:false}:{name:n}); commit();
+  };
+  document.getElementById("catAddExp").onclick=()=>addCat(S.kakeibo.cats.expense,true);
+  document.getElementById("catAddInc").onclick=()=>addCat(S.kakeibo.cats.income,false);
+
   document.getElementById("cfgSave").onclick=()=>{
     CFG.url=normUrl(document.getElementById("cfgUrl").value);
     CFG.anonKey=document.getElementById("cfgKey").value.trim();
@@ -1195,7 +1467,7 @@ async function syncNow(silent){
     if(!planRow || (localT && localT>planRow.updated_at)){
       const {error:e4}=await c.from("plans").upsert({user_id:user.id,data:S,updated_at:localT||new Date().toISOString()}); if(e4) throw e4;
     } else if(planRow && planRow.updated_at>(localT||"")){
-      S=planRow.data; S._updatedAt=planRow.updated_at; save(); pulled=true;
+      S=planRow.data; S._updatedAt=planRow.updated_at; ensureKakeibo(); save(); applyFixed(); pulled=true;
     }
     CFG.lastSyncAt=new Date().toISOString(); saveCfg();
     try{ localStorage.setItem(EKEY,JSON.stringify(E)); }catch(e){}
@@ -1218,13 +1490,20 @@ document.getElementById("fileIn").onchange=e=>{
     const obj=JSON.parse(r.result);
     if(obj.__type==="lifeplan_backup"){ S=obj.plan; E=obj.entries||E; }
     else S=obj; // 旧形式（プランのみ）
+    ensureKakeibo();
     save(); try{localStorage.setItem(EKEY,JSON.stringify(E));}catch(err){}
-    render(); alert("読み込みました");
+    applyFixed(); render(); alert("読み込みました");
   }catch(err){ alert("読み込みに失敗しました"); } };
   r.readAsText(f);
 };
-document.getElementById("resetBtn").onclick=()=>{ if(confirm("ライフプランの入力内容を初期値（平山様サンプル）に戻します。家計簿の明細は消えません。よろしいですか？")){ S=seed(); commit(); } };
+document.getElementById("resetBtn").onclick=()=>{
+  if(!confirm("ライフプランの入力内容を初期値（平山様サンプル）に戻します。\n家計簿の明細・カテゴリ・固定費・目標額は消えません。よろしいですか？")) return;
+  const keep=S.kakeibo;      // 家計簿の設定はライフプランと独立なので引き継ぐ
+  S=seed(); S.kakeibo=keep; ensureKakeibo(); commit();
+};
 
+ensureKakeibo();   // 既存ユーザーのデータに家計簿設定を補完
+applyFixed();      // 起動時に、当月ぶんまでの固定費を計上
 render();
 // PWA（https配信時のみ有効。file://では静かにスキップ）
 if("serviceWorker" in navigator && /^https?:$/.test(location.protocol)){
