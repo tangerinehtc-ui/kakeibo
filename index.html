@@ -122,6 +122,39 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
   body{background:#fff}
 }
 @media(max-width:600px){ main{padding:10px} .card{padding:12px} }
+/* ライフプラン診断 */
+.diag-badge{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+.diag-rank{width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:700;color:#fff;flex:none}
+.diag-rank.A{background:#2f9e6b}.diag-rank.B{background:#5aa84a}.diag-rank.C{background:#c9a227}.diag-rank.D{background:#d07b2f}.diag-rank.E{background:#c0492f}
+.diag-item{border-top:1px solid var(--line);padding:10px 0}
+.diag-item .h{display:flex;align-items:center;gap:8px;font-size:14px}
+.diag-item .ic{font-size:16px;flex:none}
+.diag-item .ic.good{color:var(--pos)}.diag-item .ic.ok{color:var(--accent2)}.diag-item .ic.warn{color:var(--neg)}
+.diag-item .k{font-weight:600}
+.diag-item .msg{color:var(--sub);font-size:13px;margin:2px 0 0 24px}
+.diag-item .adv{font-size:13px;margin:6px 0 0 24px;padding:8px 10px;background:var(--bg);border-radius:8px;border-left:3px solid var(--accent)}
+/* かんたん設定ガイド（ウィザード） */
+#wizard{display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.45);align-items:center;justify-content:center;padding:12px}
+.wzbox{background:var(--card);border-radius:16px;width:100%;max-width:520px;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+.wzhead{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600}
+.wzhead .x{margin-left:auto;background:transparent;border:none;font-size:22px;cursor:pointer;color:var(--sub);line-height:1;padding:0 4px}
+.wzprog{height:4px;background:var(--chip)}
+.wzprog>div{height:100%;background:var(--accent);transition:width .3s;width:0}
+.wzlog{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:180px}
+.wzb{max-width:86%;padding:9px 13px;border-radius:14px;font-size:14px;line-height:1.5;white-space:normal}
+.wzb.bot{align-self:flex-start;background:var(--chip);border-bottom-left-radius:4px}
+.wzb.me{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+.wzinput{border-top:1px solid var(--line);padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+.wzopts{display:flex;flex-wrap:wrap;gap:8px}
+.wzopts button{background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:9px 15px;cursor:pointer;color:var(--ink);font-size:14px}
+.wzopts button:hover{border-color:var(--accent);color:var(--accent)}
+.wznum{display:flex;gap:8px;align-items:center}
+.wznum input{flex:1}
+.wzrow{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.wzskip{background:transparent;border:none;color:var(--sub);font-size:13px;cursor:pointer;text-decoration:underline;padding:2px}
+.wzsum{font-size:13px;max-height:34vh;overflow-y:auto}
+.wzsum div{display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px dashed var(--line)}
+.wzsum div b{text-align:right}
 </style>
 </head>
 <body>
@@ -148,7 +181,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 
 <script>
 "use strict";
-const APP_VERSION = "2026.07.18-2";
+const APP_VERSION = "2026.07.19-2";
 const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
 const uid = () => Math.random().toString(36).slice(2,9);
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
@@ -169,6 +202,18 @@ const EDU_STAGES = [
   {label:"高校",from:15,to:17,opts:["高校(公立)","高校(私立)"]},
   {label:"大学",from:18,to:21,opts:["大学(国公立)","大学(私立文系)","大学(私立理系)","大学(私立医歯)","なし"]}
 ];
+
+/* ---------- 電化製品プリセット（名前・耐用年数・金額万円） ---------- */
+const APPL_PRESETS=[
+  ["冷蔵庫",13,15],["洗濯機",10,12],["エアコン",12,12],["テレビ",9,10],
+  ["電子レンジ",10,3],["炊飯器",6,3],["掃除機",7,4],["給湯器",12,20],
+  ["パソコン",6,15],["スマートフォン",4,10]
+];
+const APPL_STD=8; // 先頭8つを「標準セット」として扱う（給湯器まで）
+function applStdSet(boughtYear, withBoiler){
+  return APPL_PRESETS.slice(0, withBoiler?APPL_STD:APPL_STD-1)
+    .map(([name,ly,price])=>({id:uid(),name,lifeYears:ly,price,boughtYear}));
+}
 
 /* ---------- 初期データ（平山様CFをおおよそ再現） ---------- */
 function seed(){
@@ -216,7 +261,8 @@ function seed(){
     assets:[
       {id:uid(),name:"預貯金",type:"cash",balance:300,rate:0.1},
       {id:uid(),name:"つみたてNISA等",type:"invest",balance:36,rate:3.0,monthly:1.5,accumEndAge:64,drawStartAge:65,drawMonthly:5}
-    ]
+    ],
+    appliances: applStdSet(2024, true)
   };
 }
 
@@ -245,6 +291,7 @@ function ageInYear(m, year){ return year - m.birthYear; }
 /* ---------- プランデータの補完・旧形式からの移行 ---------- */
 function ensurePlanModel(){
   if(S.inflation==null) S.inflation=0;
+  if(!Array.isArray(S.appliances)) S.appliances=[];
   if(!Array.isArray(S.assets)) S.assets=[];
   S.assets.forEach(a=>{
     if(!a.id) a.id=uid();
@@ -419,9 +466,15 @@ function computeCF(){
     let edu=0;
     S.educations.forEach(ed=>{ const c=member(ed.childId); if(!c) return; edu+=eduAt(ed, ages[ed.childId])*f; });
     cat["教育・結婚資金"]+=edu;
+    // 電化製品の買い替え（購入年＋耐用年数ごとに同額を計上・インフレ反映）
+    let appliance=0;
+    (S.appliances||[]).forEach(ap=>{
+      const by=+ap.boughtYear||0, ly=Math.max(1,+ap.lifeYears||10);
+      if(by>0 && year>by && (year-by)%ly===0) appliance+=(+ap.price||0)*f;
+    });
     const tax=taxOn(taxableEarned)+pensionTax(taxablePension);
 
-    const expenseTotal = living+housing+cat["教育・結婚資金"]+cat["車両費"]+cat["その他・将来の夢"]+tax+cat["支払保険料"]-deduct;
+    const expenseTotal = living+housing+cat["教育・結婚資金"]+cat["車両費"]+cat["その他・将来の夢"]+appliance+tax+cat["支払保険料"]-deduct;
     const balance = incomeTotal-expenseTotal;
 
     // ----- 資産（投資は銘柄ごとに月次で複利・積立・取り崩し）-----
@@ -454,7 +507,7 @@ function computeCF(){
       year, primAge, ages,
       salary,pension,retire,other,incomeTotal,
       living, housing, education:cat["教育・結婚資金"], car:cat["車両費"],
-      other_exp:cat["その他・将来の夢"], tax, insurance:cat["支払保険料"], deduct,
+      other_exp:cat["その他・将来の夢"], appliance, tax, insurance:cat["支払保険料"], deduct,
       expenseTotal, balance, contrib, withdraw, cash, invest, netWorth
     });
   }
@@ -511,7 +564,9 @@ function buildNav(){
 function renderPlan(){
   const el=document.getElementById("tab-plan");
   const SUBS=[["family","家族・基本"],["income","収入"],["expense","支出"],["assets","資産"]];
-  el.innerHTML=`<div class="chips" style="margin:4px 0 14px">${SUBS.map(([id,l])=>`<button class="chip ${planSub===id?"on":""}" data-ps="${id}">${l}</button>`).join("")}</div><div id="planBody"></div>`;
+  el.innerHTML=`<div style="display:flex;justify-content:flex-end;margin:2px 0 8px"><button class="btn ghost sm" id="planWizBtn">🪄 かんたん設定ガイド</button></div>
+    <div class="chips" style="margin:4px 0 14px">${SUBS.map(([id,l])=>`<button class="chip ${planSub===id?"on":""}" data-ps="${id}">${l}</button>`).join("")}</div><div id="planBody"></div>`;
+  document.getElementById("planWizBtn").onclick=wzOpen;
   el.querySelectorAll("[data-ps]").forEach(b=>b.onclick=()=>{ planSub=b.dataset.ps; render(); });
   if(planSub==="family") renderFamily();
   if(planSub==="income") renderIncome();
@@ -555,6 +610,7 @@ function renderHome(){
   if(+S.inflation>0) warns.push(`物価上昇率 ${S.inflation}%/年 を支出に反映中`);
   const end=rows[rows.length-1];
   el.innerHTML=`
+  ${diagnosisCard(rows)}
   <div class="card">
     <h2>サマリー</h2>
     <p class="hint">現在の前提で ${S.baseYear}年〜${end.year}年（ご本人${rows[0].primAge}歳〜${end.primAge}歳）を試算した結果です。</p>
@@ -573,6 +629,8 @@ function renderHome(){
   </div>
   <div class="card">
     <h2>使い方</h2>
+    <p class="hint">入力が大変なときは、質問に答えるだけで前提を作れる<b>かんたん設定ガイド</b>が便利です。</p>
+    <button class="btn" id="homeWizBtn" style="margin-bottom:12px">🪄 かんたん設定ガイドで入力する</button>
     <p class="hint">「前提の入力」タブで家族・収入・支出・資産を入力すると、キャッシュフロー表とグラフが自動で再計算されます。前提を変えるたびにこのサマリーが更新されるので、「住宅ローンを繰り上げたら」「配偶者がフルタイムに戻ったら」といった見直しを試せます。毎日の記録はヘッダーの「家計簿」から。バックアップは右上の⚙設定にあります。</p>
     <details class="help"><summary>試算の前提について</summary>
     <p class="mini">・税金/社会保険料は年収帯ごとの実効負担率（給与8〜33%、年金10%）で概算しています。<br>
@@ -580,6 +638,220 @@ function renderHome(){
     ・物価上昇率を設定すると、生活費・教育費・イベント支出に毎年反映されます（ローン返済・保険料は契約額のまま）。<br>
     ・年金は65歳基準の額に、繰上げ-0.4%/月・繰下げ+0.7%/月を掛けて調整します。<br>
     ・年齢は「年 − 生年」で計算（誕生月は考慮しません）。実際の数値を保証するものではありません。</p></details>
+  </div>`;
+  const hw=document.getElementById("homeWizBtn"); if(hw) hw.onclick=wzOpen;
+  const db=document.getElementById("diagWizBtn"); if(db) db.onclick=wzOpen;
+}
+
+/* ================= かんたん設定ガイド（会話形式ウィザード） ================= */
+const EDU_PRESETS={
+  public:{"未就学(0-2)":"保育園(認可)","未就学(3-5)":"幼稚園(公立)","小学校":"小学校(公立)","中学校":"中学校(公立)","高校":"高校(公立)","大学":"大学(国公立)"},
+  uni_private:{"未就学(0-2)":"保育園(認可)","未就学(3-5)":"幼稚園(公立)","小学校":"小学校(公立)","中学校":"中学校(公立)","高校":"高校(公立)","大学":"大学(私立文系)"},
+  private:{"未就学(0-2)":"保育園(認可)","未就学(3-5)":"幼稚園(私立)","小学校":"小学校(公立)","中学校":"中学校(私立)","高校":"高校(私立)","大学":"大学(私立文系)"},
+  std:{"未就学(0-2)":"保育園(認可)","未就学(3-5)":"幼稚園(私立)","小学校":"小学校(公立)","中学校":"中学校(公立)","高校":"高校(公立)","大学":"大学(私立文系)"}
+};
+const WZ_STEPS=[
+  {id:"selfBirth",type:"number",q:"はじめに、あなたの生まれ年を西暦で教えてください。",unit:"年",def:1990,min:1940,max:2015},
+  {id:"hasSpouse",type:"choice",q:"配偶者（パートナー）はいますか？",options:[{l:"いる",v:"yes"},{l:"いない",v:"no"}]},
+  {id:"kids",type:"choice",q:"お子さんは何人ですか？（これから予定なら見込みの人数で）",options:[{l:"0人",v:0},{l:"1人",v:1},{l:"2人",v:2},{l:"3人",v:3}]},
+  {id:"kidYears",type:"years",q:"お子さんの生まれ年を教えてください（予定なら見込みの年で）。",skip:a=>!a.kids},
+  {id:"selfIncome",type:"number",q:"あなたの税込み年収は？（だいたいでOK）",unit:"万円/年",def:400,min:0,max:5000},
+  {id:"spouseIncome",type:"number",q:"配偶者の税込み年収は？（働いていなければ0）",unit:"万円/年",def:0,min:0,max:5000,skip:a=>a.hasSpouse!=="yes"},
+  {id:"housing",type:"choice",q:"お住まいは？",options:[{l:"賃貸",v:"rent"},{l:"持ち家（ローンあり）",v:"own_loan"},{l:"持ち家（ローンなし）",v:"own_free"}]},
+  {id:"rent",type:"number",q:"毎月の家賃は？",unit:"万円/月",def:8,min:0,max:50,skip:a=>a.housing!=="rent"},
+  {id:"loanBal",type:"number",q:"住宅ローンの残高は？（今残っている金額）",unit:"万円",def:2000,min:0,max:30000,skip:a=>a.housing!=="own_loan"},
+  {id:"loanRate",type:"number",q:"ローンの金利は？",unit:"%",def:1.0,min:0,max:5,step:0.1,skip:a=>a.housing!=="own_loan"},
+  {id:"loanYears",type:"number",q:"あと何年で返し終わりますか？",unit:"年",def:25,min:1,max:50,skip:a=>a.housing!=="own_loan"},
+  {id:"eduPlan",type:"choice",q:"お子さんの進路の方針に近いのは？（あとで子ごとに調整できます）",options:[{l:"できるだけ公立",v:"public"},{l:"大学は私立想定",v:"uni_private"},{l:"中学から私立も",v:"private"},{l:"わからない（標準）",v:"std"}],skip:a=>!a.kids},
+  {id:"living",type:"number",q:"毎月の生活費は？",hint:"住居費・教育費・保険は除く。食費・光熱費・通信・日用品などの合計。",unit:"万円/月",def:20,min:1,max:100},
+  {id:"insurance",type:"number",q:"生命保険などの保険料は？（年間、なければ0）",unit:"万円/年",def:20,min:0,max:300},
+  {id:"savings",type:"number",q:"今の預貯金（すぐ使えるお金）は？",unit:"万円",def:300,min:0,max:200000},
+  {id:"invest",type:"number",q:"投資（NISA・株・投信など）の今の残高は？なければ0。",unit:"万円",def:0,min:0,max:200000},
+  {id:"monthlyInvest",type:"number",q:"毎月の積立額は？（NISA等、なければ0）",unit:"万円/月",def:0,min:0,max:100},
+  {id:"pensionKnown",type:"choice",q:"年金の見込み額は分かりますか？",hint:"ねんきん定期便・ねんきんネットの「受給見込額」など。",options:[{l:"だいたい分かる",v:"yes"},{l:"わからない（年収から概算）",v:"no"}]},
+  {id:"selfPension",type:"number",q:"あなたの年金の見込み（年額）は？",unit:"万円/年",def:150,min:0,max:500,skip:a=>a.pensionKnown!=="yes"},
+  {id:"spousePension",type:"number",q:"配偶者の年金の見込み（年額）は？",unit:"万円/年",def:80,min:0,max:500,skip:a=>!(a.pensionKnown==="yes"&&a.hasSpouse==="yes")}
+];
+let wz=null;
+function wzEnsureDom(){
+  if(document.getElementById("wizard")) return;
+  const d=document.createElement("div"); d.id="wizard";
+  d.innerHTML=`<div class="wzbox">
+    <div class="wzhead"><span>🪄 かんたん設定ガイド</span><button class="x" id="wzClose" aria-label="閉じる">×</button></div>
+    <div class="wzprog"><div id="wzProg"></div></div>
+    <div class="wzlog" id="wzLog"></div>
+    <div class="wzinput" id="wzInput"></div>
+  </div>`;
+  document.body.appendChild(d);
+  document.getElementById("wzClose").onclick=wzCloseConfirm;
+  d.onclick=e=>{ if(e.target===d) wzCloseConfirm(); };
+}
+function wzCloseConfirm(){ if(wz&&wz.done){ wzClose(); return; } if(confirm("設定ガイドを閉じますか？（途中までの入力は反映されません）")) wzClose(); }
+function wzClose(){ const d=document.getElementById("wizard"); if(d) d.style.display="none"; wz=null; }
+function wzPrefill(){
+  const a={};
+  try{
+    const self=S.members.find(m=>m.role==="self"); if(self) a.selfBirth=self.birthYear;
+    if(S.living&&S.living[0]) a.living=S.living[0].monthly;
+    const cash=S.assets.filter(x=>x.type!=="invest").reduce((s,x)=>s+(+x.balance||0),0); if(cash) a.savings=Math.round(cash);
+    const iv=S.assets.find(x=>x.type==="invest"); if(iv){ a.invest=Math.round(iv.balance); a.monthlyInvest=iv.monthly; }
+  }catch(e){}
+  return a;
+}
+function wzOpen(){
+  wzEnsureDom();
+  wz={a:wzPrefill(),i:0,done:false};
+  document.getElementById("wizard").style.display="flex";
+  document.getElementById("wzLog").innerHTML="";
+  wzBubble("bot","こんにちは！いくつかの質問に答えるだけで、ライフプランの前提を作成します。3〜5分ほどで終わります。数字は「わからない・標準でOK」で目安の値を使ってスキップできます。");
+  wz.i=wzSkipFwd(0);
+  wzAsk();
+}
+function wzSkipFwd(i){ while(i<WZ_STEPS.length && WZ_STEPS[i].skip && WZ_STEPS[i].skip(wz.a)) i++; return i; }
+function wzSkipBack(i){ while(i>=0 && WZ_STEPS[i].skip && WZ_STEPS[i].skip(wz.a)) i--; return i; }
+function wzBubble(who,text){ const log=document.getElementById("wzLog"); const b=document.createElement("div"); b.className="wzb "+who; b.innerHTML=text; log.appendChild(b); log.scrollTop=log.scrollHeight; }
+function wzAsk(){
+  const inp=document.getElementById("wzInput");
+  document.getElementById("wzProg").style.width=Math.round(wz.i/WZ_STEPS.length*100)+"%";
+  if(wz.i>=WZ_STEPS.length){ wzSummary(); return; }
+  const st=WZ_STEPS[wz.i];
+  wzBubble("bot", st.q + (st.hint?`<br><span style="color:var(--sub);font-size:12px">${st.hint}</span>`:""));
+  inp.innerHTML="";
+  if(st.type==="choice"){
+    const wrap=document.createElement("div"); wrap.className="wzopts";
+    st.options.forEach(o=>{ const b=document.createElement("button"); b.textContent=o.l; b.onclick=()=>wzAnswer(o.v,o.l); wrap.appendChild(b); });
+    inp.appendChild(wrap);
+    if(wz.i>0){ const back=document.createElement("button"); back.className="wzskip"; back.textContent="← 戻る"; back.onclick=wzBack; back.style.marginTop="6px"; inp.appendChild(back); }
+  } else if(st.type==="number"){
+    const def=wz.a[st.id]!=null?wz.a[st.id]:st.def;
+    inp.innerHTML=`<div class="wznum"><input type="number" id="wzNum" value="${def}" step="${st.step||1}" min="${st.min}" max="${st.max}"><span class="mini">${st.unit||""}</span><button class="btn sm" id="wzNext">次へ</button></div>
+      <div class="wzrow"><button class="wzskip" id="wzSkip">わからない・標準でOK（${st.def}${st.unit||""}）</button>${wz.i>0?`<button class="wzskip" id="wzBack">← 戻る</button>`:""}</div>`;
+    const go=()=>{ const raw=document.getElementById("wzNum").value; const v=raw===""?st.def:+raw; const val=isNaN(v)?st.def:clamp(v,st.min,st.max); wzAnswer(val, val+(st.unit||"")); };
+    document.getElementById("wzNext").onclick=go;
+    document.getElementById("wzNum").onkeydown=e=>{ if(e.key==="Enter") go(); };
+    document.getElementById("wzSkip").onclick=()=>wzAnswer(st.def, st.def+(st.unit||"")+"（標準）");
+    const bk=document.getElementById("wzBack"); if(bk) bk.onclick=wzBack;
+    setTimeout(()=>{ const n=document.getElementById("wzNum"); if(n){ n.focus(); n.select(); } },30);
+  } else if(st.type==="years"){
+    const n=wz.a.kids||0, cur=wz.a.kidYears||[];
+    let html=`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(88px,1fr))">`;
+    for(let k=0;k<n;k++){ const dv=cur[k]!=null?cur[k]:(S.baseYear-3*k); html+=`<div><label class="f">第${k+1}子</label><input type="number" class="wzKY" value="${dv}" min="1990" max="${S.baseYear+12}"></div>`; }
+    html+=`</div><div class="wzrow" style="margin-top:8px"><button class="wzskip" id="wzBack">← 戻る</button><button class="btn sm" id="wzNext">次へ</button></div>`;
+    inp.innerHTML=html;
+    document.getElementById("wzNext").onclick=()=>{ const ys=[...document.querySelectorAll(".wzKY")].map(x=>clamp(+x.value||S.baseYear,1990,S.baseYear+12)); wzAnswer(ys, ys.map(y=>y+"年生まれ").join("・")); };
+    document.getElementById("wzBack").onclick=wzBack;
+  }
+}
+function wzAnswer(v,disp){ const st=WZ_STEPS[wz.i]; wz.a[st.id]=v; wzBubble("me",disp); wz.i=wzSkipFwd(wz.i+1); wzAsk(); }
+function wzBack(){ let i=wzSkipBack(wz.i-1); if(i<0) return; wz.i=i; wzBubble("bot","↩ ひとつ前の質問に戻ります。"); wzAsk(); }
+function wzSummary(){
+  wz.done=true;
+  document.getElementById("wzProg").style.width="100%";
+  const a=wz.a, R=[];
+  R.push(["ご本人の生まれ年",a.selfBirth+"年"]);
+  R.push(["配偶者",a.hasSpouse==="yes"?"あり":"なし"]);
+  R.push(["お子さん",a.kids?`${a.kids}人（${(a.kidYears||[]).map(y=>y+"年").join("・")}）`:"なし"]);
+  R.push(["年収（本人）",(a.selfIncome||0)+"万円"]);
+  if(a.hasSpouse==="yes") R.push(["年収（配偶者）",(a.spouseIncome||0)+"万円"]);
+  R.push(["住まい",{rent:"賃貸",own_loan:"持ち家（ローンあり）",own_free:"持ち家（ローンなし）"}[a.housing]||"—"]);
+  if(a.housing==="rent") R.push(["家賃",(a.rent||0)+"万円/月"]);
+  if(a.housing==="own_loan") R.push(["住宅ローン",`残${a.loanBal}万円・${a.loanRate}%・あと${a.loanYears}年`]);
+  if(a.kids) R.push(["進路方針",{public:"できるだけ公立",uni_private:"大学は私立想定",private:"中学から私立も",std:"標準"}[a.eduPlan]||"標準"]);
+  R.push(["生活費",(a.living||0)+"万円/月"]);
+  R.push(["保険料",(a.insurance||0)+"万円/年"]);
+  R.push(["預貯金",(a.savings||0)+"万円"]);
+  R.push(["投資残高",(a.invest||0)+"万円"]);
+  R.push(["毎月の積立",(a.monthlyInvest||0)+"万円/月"]);
+  R.push(["年金",a.pensionKnown==="yes"?`本人${a.selfPension}万円/年${a.hasSpouse==="yes"?"・配偶者"+a.spousePension+"万円/年":""}`:"年収から概算"]);
+  R.push(["家電の買い替え","標準セットを自動設定（購入年はあとで調整）"]);
+  wzBubble("bot","ありがとうございます！入力内容はこちらです。この内容でライフプランを作成しますか？（作成後もすべて手直しできます）");
+  const inp=document.getElementById("wzInput");
+  inp.innerHTML=`<div class="wzsum">${R.map(r=>`<div><span>${r[0]}</span><b>${r[1]}</b></div>`).join("")}</div>
+    <div class="wzrow" style="margin-top:10px"><button class="wzskip" id="wzRestart">↩ 最初からやり直す</button><button class="btn" id="wzApply">この内容で作成する</button></div>`;
+  document.getElementById("wzApply").onclick=()=>{ wzApply(wz.a); wzClose(); MODE="lifeplan"; settingsOpen=false; pCur="home"; render(); window.scrollTo(0,0); alert("ライフプランを作成しました。サマリー上部に診断を表示しています。前提は各タブでいつでも調整できます。"); };
+  document.getElementById("wzRestart").onclick=wzOpen;
+}
+function wzSalaryCurve(nowAge,inc){ const a0=clamp(nowAge,22,64); if(a0>=54||inc<=0) return [{age:a0,annual:inc}]; return [{age:a0,annual:inc},{age:55,annual:Math.round(inc*1.15)}]; }
+function wzEstPension(inc){ return inc<=0?78:Math.round(78+inc*0.0055*40); }
+function wzOwnMaint(nowAge){ return [
+  {name:"固定資産税",annual:12,fromAge:Math.max(0,nowAge),toAge:100,cycle:1},
+  {name:"火災保険料",annual:20,fromAge:Math.max(0,nowAge),toAge:100,cycle:5},
+  {name:"住宅メンテ",annual:100,fromAge:Math.max(0,nowAge)+12,toAge:100,cycle:15}
+]; }
+function wzApply(a){
+  const baseYear=S.baseYear||new Date().getFullYear();
+  const selfBirth=+a.selfBirth||1990;
+  const nowAge=clamp(baseYear-selfBirth,0,80);
+  const members=[{id:"self",name:"ご本人",role:"self",birthYear:selfBirth,lifespan:90}];
+  if(a.hasSpouse==="yes") members.push({id:"spouse",name:"配偶者",role:"spouse",birthYear:selfBirth,lifespan:95});
+  const kidYears=a.kids?(a.kidYears||[]):[];
+  kidYears.forEach((y,i)=>members.push({id:"c"+(i+1),name:"第"+(i+1)+"子",role:"child",birthYear:+y||baseYear,lifespan:90}));
+  const incomes=[];
+  incomes.push({id:uid(),memberId:"self",type:"salary",endAge:65,points:wzSalaryCurve(nowAge,+a.selfIncome||0)});
+  if(a.hasSpouse==="yes"&&(+a.spouseIncome||0)>0) incomes.push({id:uid(),memberId:"spouse",type:"salary",endAge:65,points:wzSalaryCurve(nowAge,+a.spouseIncome||0)});
+  const selfPen=a.pensionKnown==="yes"?(+a.selfPension||0):wzEstPension(+a.selfIncome||0);
+  incomes.push({id:uid(),memberId:"self",type:"pension",startAge:65,claimAge:65,annual:selfPen});
+  if(a.hasSpouse==="yes"){ const sp=a.pensionKnown==="yes"?(+a.spousePension||0):wzEstPension(+a.spouseIncome||0); incomes.push({id:uid(),memberId:"spouse",type:"pension",startAge:65,claimAge:65,annual:sp}); }
+  const liv=+a.living||20;
+  const living=[{from:0,to:64,monthly:liv},{from:65,to:120,monthly:Math.round(liv*0.85*10)/10}];
+  let rent=[], maintenance=[];
+  const loan={on:false,principal:0,rate:1.0,termYears:35,startYear:baseYear,deductOn:false,deductYears:13,deductRate:0.7,deductCap:35,rate2:0,rate2From:0,rate3:0,rate3From:0,prepays:[]};
+  if(a.housing==="rent") rent=[{fromYear:baseYear,toYear:baseYear+100,monthly:+a.rent||8}];
+  else if(a.housing==="own_loan"){ loan.on=true; loan.principal=+a.loanBal||0; loan.rate=+a.loanRate||1.0; loan.termYears=Math.max(1,+a.loanYears||25); loan.startYear=baseYear; maintenance=wzOwnMaint(nowAge); }
+  else if(a.housing==="own_free") maintenance=wzOwnMaint(nowAge);
+  const expenses=[];
+  if((+a.insurance||0)>0) expenses.push({id:uid(),category:"支払保険料",name:"保険料",targetId:"self",amount:+a.insurance,fromAge:nowAge,toAge:64,cycle:1});
+  const educations=[];
+  if(a.kids){ const preset=EDU_PRESETS[a.eduPlan]||EDU_PRESETS.std; members.filter(m=>m.role==="child").forEach(c=>educations.push({id:uid(),childId:c.id,independentAge:22,choices:Object.assign({},preset)})); }
+  const assets=[{id:uid(),name:"預貯金",type:"cash",balance:+a.savings||0,rate:0.1}];
+  const inv=+a.invest||0, mo=+a.monthlyInvest||0;
+  if(inv>0||mo>0) assets.push({id:uid(),name:"投資（NISA等）",type:"invest",balance:inv,rate:3.0,monthly:mo,accumEndAge:64,drawStartAge:65,drawMonthly:0});
+  const appliances=applStdSet(baseYear, a.housing!=="rent");
+  const keepKakeibo=S.kakeibo, keepScen=S.scenarios;
+  S={ baseYear, inflation:(+S.inflation||0), members, incomes, living, housing:{rent,loan,maintenance}, expenses, educations, assets, appliances };
+  if(keepKakeibo) S.kakeibo=keepKakeibo;
+  if(Array.isArray(keepScen)) S.scenarios=keepScen;
+  ensureKakeibo(); ensurePlanModel(); commit();
+}
+
+/* ================= ライフプラン診断（ルールベース） ================= */
+function simLivingCut(delta){ const bak=S.living; S.living=bak.map(s=>({from:s.from,to:s.to,monthly:Math.max(0,s.monthly-delta)})); let r; try{ r=computeCF(); } finally{ S.living=bak; } return r; }
+function minLivingCut(){ for(let d=1;d<=30;d++){ if(!simLivingCut(d).rows.find(x=>x.netWorth<0)) return d; } return null; }
+function simInflation(pct){ const bak=S.inflation; S.inflation=pct; let r; try{ r=computeCF(); } finally{ S.inflation=bak; } return r; }
+function diagnosisCard(rows){
+  const end=rows[rows.length-1];
+  const firstNeg=rows.find(r=>r.netWorth<0);
+  const cashNow=S.assets.filter(a=>a.type!=="invest").reduce((s,a)=>s+(+a.balance||0),0);
+  const monthlyLiving=rows[0].living/12;
+  const net0=Math.max(1,rows[0].incomeTotal-rows[0].tax);
+  const D=[];
+  if(!firstNeg) D.push({k:"生涯の資金",lv:"good",msg:`試算では ${end.primAge}歳（${end.year}年）まで資産がプラスを保てます。`});
+  else{ const cut=minLivingCut(); D.push({k:"生涯の資金",lv:"warn",msg:`${firstNeg.primAge}歳（${firstNeg.year}年）に資産が尽きる試算です。`,adv:cut!=null?`生活費を月 ${cut}万円 抑えると、枯渇を回避できる試算になります。`:`生活費の見直しだけでは補いきれません。収入を増やす・年金を繰り下げる・大きな支出を減らす、を組み合わせて検討しましょう。`}); }
+  const months=monthlyLiving>0?cashNow/monthlyLiving:99;
+  D.push({k:"緊急予備資金",lv:months>=6?"good":months>=3?"ok":"warn",msg:`預貯金は生活費の約 ${months.toFixed(1)}ヶ月分です（目安6ヶ月）。`,adv:months<6?`失業や病気に備え、生活費6ヶ月分（約 ${Math.round(monthlyLiving*6)}万円）を預貯金で確保すると安心です。`:""});
+  const srate=rows[0].balance/net0*100;
+  D.push({k:"貯蓄率",lv:srate>=20?"good":srate>=10?"ok":"warn",msg:srate>=0?`今年の手取りに対する貯蓄の割合は約 ${srate.toFixed(0)}%（目安20%）。`:`今年は支出が収入を上回る試算です（貯蓄率マイナス）。`,adv:srate<20?`手取りの2割（年 約${Math.round(net0*0.2)}万円）の貯蓄を目標にすると、資産形成が安定します。`:""});
+  const hp=monthlyPlan(S.baseYear); const hAnnual=hp?hp.recur.housing*12:0;
+  if(hAnnual>0){ const hr=hAnnual/net0*100; D.push({k:"住居費の負担",lv:hr<=20?"good":hr<=25?"ok":"warn",msg:`住居費（ローン・家賃）は手取りの約 ${hr.toFixed(0)}%（目安25%以内）。`,adv:hr>25?`負担がやや重めです。繰上返済・借り換えや、ほかの固定費の見直しで余裕を作りましょう。`:""}); }
+  const eduRows=rows.filter(r=>r.education>0);
+  if(eduRows.length){ const pe=eduRows.reduce((x,r)=>r.education>x.education?r:x); const bad=pe.cash<0||pe.netWorth<0; D.push({k:"教育費のピーク",lv:bad?"warn":"good",msg:`ピークは ${pe.year}年（本人${pe.primAge}歳・年 ${MAN(pe.education)}万円）。`,adv:bad?`この時期に資金が不足しがちです。学資保険や早めの積立で、支出の山をならしておきましょう。`:`ピーク時も資金は確保できる見込みです。`}); }
+  const r65=rows.find(r=>r.primAge>=65)||end;
+  D.push({k:"老後の資金",lv:firstNeg?(firstNeg.primAge<85?"warn":"ok"):"good",msg:`65歳時点の資産は約 ${MAN(r65.netWorth)}万円。`+(firstNeg?`その後 ${firstNeg.primAge}歳で資金が尽きる試算です。`:`生涯を通じて枯渇しません。`),adv:(firstNeg&&firstNeg.primAge<90)?`年金の繰下げ受給（最大75歳で+84%）や就労期間の延長で、受給額と資産の寿命を伸ばせます（「収入」タブで試せます）。`:""});
+  const infPct=Math.max(1,(+S.inflation||0)+1);
+  const infR=simInflation(infPct); const infEnd=infR.rows[infR.rows.length-1]; const infNeg=infR.rows.find(r=>r.netWorth<0);
+  const drop=end.netWorth-infEnd.netWorth;
+  const infLv=(infNeg&&!firstNeg)?"warn":(end.netWorth>0&&drop>end.netWorth*0.3)?"ok":"good";
+  D.push({k:"インフレ耐性",lv:infLv,msg:`物価が今より高め（+${infPct}%/年）に進むと、最終資産は約 ${MAN(infEnd.netWorth)}万円（${drop>=0?"−":"+"}${MAN(Math.abs(drop))}万円）。`,adv:infLv!=="good"?`物価上昇に強い資産（株式インデックス等）での運用や、支出の点検で備えましょう（「資産」タブで物価上昇率を試せます）。`:""});
+  const pts=D.reduce((s,d)=>s+(d.lv==="good"?2:d.lv==="ok"?1:0),0), max=D.length*2, pct=max?pts/max:0;
+  let rank=pct>=0.85?"A":pct>=0.7?"B":pct>=0.5?"C":pct>=0.3?"D":"E";
+  if(firstNeg&&(rank==="A"||rank==="B")) rank="C";
+  const comment={A:"とても健全なプランです。この調子で。",B:"おおむね良好です。いくつか整えるとより安心です。",C:"注意点がいくつかあります。下の改善ポイントを確認しましょう。",D:"見直しをおすすめします。改善ポイントから着手しましょう。",E:"早めの見直しが必要です。まずは支出と住居費から。"}[rank];
+  const ic=lv=>lv==="good"?"◎":lv==="ok"?"○":"⚠";
+  const items=D.map(d=>`<div class="diag-item"><div class="h"><span class="ic ${d.lv}">${ic(d.lv)}</span><span class="k">${d.k}</span></div><div class="msg">${d.msg}</div>${d.adv?`<div class="adv">💡 ${d.adv}</div>`:""}</div>`).join("");
+  return `<div class="card">
+    <div class="diag-badge"><div class="diag-rank ${rank}">${rank}</div><div><h2 style="margin:0">ライフプラン診断</h2><p class="hint" style="margin:2px 0 0">${comment}</p></div></div>
+    ${items}
+    <p class="mini" style="margin-top:10px">この診断はアプリ内の計算だけで自動判定した目安です（助言を保証するものではありません）。前提を変えると自動で再判定されます。設定が大変なときは <button class="wzskip" id="diagWizBtn" style="font-size:12px">🪄 かんたん設定ガイド</button> もどうぞ。</p>
   </div>`;
 }
 
@@ -703,6 +975,17 @@ function renderExpense(){
     <p class="hint">子ごとに進路を選ぶと、その子の年齢に合わせて教育費が自動計上されます（金額は文科省統計の目安・万円/年）。</p>
     <div id="eduList"></div></div>
 
+  <div class="card"><h2>電化製品の買い替え</h2>
+    <p class="hint">購入した年・金額と想定の寿命（耐用年数）を設定すると、寿命が来るたびに同じ金額が買い替え費として自動計上されます。購入年は実際に買った年に直してください。</p>
+    <div id="applList"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      <select id="applPreset" style="width:auto">${APPL_PRESETS.map(([n,ly,p])=>`<option value="${n}">${n}（目安 ${ly}年・${p}万円）</option>`).join("")}</select>
+      <button class="btn ghost sm" id="addApplPre">+ 追加</button>
+      <button class="btn ghost sm" id="addApplFree">+ 自由に追加</button>
+      <button class="btn ghost sm" id="applBulk">標準セットをまとめて追加</button>
+    </div>
+    <p class="mini" id="applSum" style="margin-top:8px"></p></div>
+
   <div class="card"><h2>その他の支出（車・旅行・保険料 など）</h2>
     <p class="hint">「金額 × 対象者の年齢帯 × 何年ごと」で、周期的な支出をまとめて表現します。</p>
     <div id="expList"></div>
@@ -734,10 +1017,56 @@ function renderExpense(){
     ed.appendChild(b);
   });
 
+  // 電化製品
+  renderApplList();
+
   // その他支出
   const xl=document.getElementById("expList");
   S.expenses.forEach(e=>xl.appendChild(expCard(e)));
   document.getElementById("addExp").onclick=()=>{S.expenses.push({id:uid(),category:"その他・将来の夢",name:"新しい支出",targetId:S.members[0].id,amount:10,fromAge:30,toAge:60,cycle:1});commit();};
+}
+function applNextYear(ap){
+  const by=+ap.boughtYear||0, ly=Math.max(1,+ap.lifeYears||10);
+  if(!by) return null;
+  let y=by+ly; while(y<S.baseYear) y+=ly; return y;
+}
+function renderApplList(){
+  const al=document.getElementById("applList"); if(!al) return;
+  al.innerHTML="";
+  (S.appliances||[]).forEach(ap=>{
+    const d=document.createElement("div"); d.className="itemrow"; d.style.gridTemplateColumns="1.3fr 86px 86px 86px auto auto";
+    const nx=applNextYear(ap);
+    d.innerHTML=`
+      <div><label class="f">電化製品名</label><input type="text" value="${(ap.name||"").replace(/"/g,"&quot;")}" data-k="name"></div>
+      <div><label class="f">購入年</label><input type="number" value="${ap.boughtYear}" data-k="boughtYear"></div>
+      <div><label class="f">金額(万円)</label><input type="number" value="${ap.price}" data-k="price"></div>
+      <div><label class="f">耐用年数</label><input type="number" value="${ap.lifeYears}" data-k="lifeYears"></div>
+      <div class="mini" style="align-self:center">${nx?`次回 <b>${nx}年</b>`:"購入年未設定"}</div>
+      <div><button class="btn danger sm" title="削除">×</button></div>`;
+    d.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
+      const k=inp.dataset.k; ap[k]=k==="name"?e.target.value:+e.target.value; commit();
+    });
+    d.querySelector(".danger").onclick=()=>{ S.appliances=S.appliances.filter(x=>x!==ap); commit(); };
+    al.appendChild(d);
+  });
+  if(!(S.appliances||[]).length) al.innerHTML=`<p class="mini">まだ登録がありません。「標準セットをまとめて追加」が手軽です。</p>`;
+  const avg=(S.appliances||[]).reduce((s,ap)=>s+(+ap.price||0)/Math.max(1,+ap.lifeYears||10),0);
+  const sum=document.getElementById("applSum");
+  if(sum) sum.innerHTML=(S.appliances||[]).length?`買い替え費の年平均: 約 <b>${avg.toFixed(1)}万円</b>（金額÷耐用年数の合計）`:"";
+  const pre=document.getElementById("applPreset");
+  document.getElementById("addApplPre").onclick=()=>{
+    const p=APPL_PRESETS.find(x=>x[0]===pre.value); if(!p) return;
+    S.appliances.push({id:uid(),name:p[0],lifeYears:p[1],price:p[2],boughtYear:S.baseYear}); commit();
+  };
+  document.getElementById("addApplFree").onclick=()=>{
+    S.appliances.push({id:uid(),name:"新しい家電",lifeYears:10,price:5,boughtYear:S.baseYear}); commit();
+  };
+  document.getElementById("applBulk").onclick=()=>{
+    const have=new Set((S.appliances||[]).map(a=>a.name));
+    const added=applStdSet(S.baseYear,true).filter(a=>!have.has(a.name));
+    if(!added.length){ alert("標準セットの家電はすべて追加済みです"); return; }
+    S.appliances.push(...added); commit();
+  };
 }
 function renderHousing(box){
   const h=S.housing, loan=h.loan;
@@ -940,7 +1269,7 @@ function renderCF(){
     ["収入：給与・退職金","salary","in"],["収入：年金","pension","in"],["収入：その他","other","in"],
     ["収入合計","incomeTotal","tot"],
     ["生活費","living","ex"],["住宅費","housing","ex"],["教育・結婚","education","ex"],
-    ["車両費","car","ex"],["その他・将来の夢","other_exp","ex"],["税・社保","tax","ex"],["支払保険料","insurance","ex"],
+    ["車両費","car","ex"],["家電買替","appliance","ex"],["その他・将来の夢","other_exp","ex"],["税・社保","tax","ex"],["支払保険料","insurance","ex"],
     ["支出合計","expenseTotal","tot"],
     ["収支差額","balance","bal"],
     ["投資への積立","contrib","ex"],["投資の取り崩し","withdraw","in"],
@@ -971,7 +1300,7 @@ function renderCharts(){
     <div class="card"><h2>年度別の収支差額</h2><div class="chartbox">${balanceBars(rows)}</div>
       <div class="legend"><span><i style="background:var(--pos)"></i>黒字</span><span><i style="background:var(--neg)"></i>赤字</span></div></div>
     <div class="card"><h2>支出の内訳（5年ごと）</h2><div class="chartbox">${stackedExpense(rows)}</div>
-      <div class="legend">${["生活費#4fb39a","住宅費#6ba0d8","教育#e0a13a","車両#c07f5c","その他#9b8bd0","税・社保#8a8a80","保険#d47ba0"].map(x=>{const[n,c]=x.split("#");return `<span><i style="background:#${c}"></i>${n}</span>`;}).join("")}</div></div>`;
+      <div class="legend">${["生活費#4fb39a","住宅費#6ba0d8","教育#e0a13a","車両#c07f5c","家電#7fb069","その他#9b8bd0","税・社保#8a8a80","保険#d47ba0"].map(x=>{const[n,c]=x.split("#");return `<span><i style="background:#${c}"></i>${n}</span>`;}).join("")}</div></div>`;
 }
 function chartFrame(w,h){ return {w,h,pad:{l:52,r:14,t:14,b:34}}; }
 function lineChart(rows){
@@ -1030,7 +1359,7 @@ function balanceBars(rows){
   return `<svg width="${w}" height="${h}" role="img" style="max-width:none">${grid}${bars}${xlab}</svg>`;
 }
 function stackedExpense(rows){
-  const keys=[["living","#4fb39a"],["housing","#6ba0d8"],["education","#e0a13a"],["car","#c07f5c"],["other_exp","#9b8bd0"],["tax","#8a8a80"],["insurance","#d47ba0"]];
+  const keys=[["living","#4fb39a"],["housing","#6ba0d8"],["education","#e0a13a"],["car","#c07f5c"],["appliance","#7fb069"],["other_exp","#9b8bd0"],["tax","#8a8a80"],["insurance","#d47ba0"]];
   const picked=rows.filter((r,i)=>i%5===0);
   const w=Math.max(680,picked.length*54+70), h=260, pad={l:52,r:14,t:14,b:34};
   const totals=picked.map(r=>keys.reduce((s,[k])=>s+Math.max(0,r[k]),0));
@@ -1071,12 +1400,12 @@ function monthlyPlan(year){
       insurance: row.insurance/12,
       invest: row.contrib/12,
     },
-    // イベント（年額）: 住宅維持・車・教育・その他の夢
+    // イベント（年額）: 住宅維持・車・教育・その他（家電買替含む）
     events:{
       housing: row.housing - rentLoan,
       car: row.car,
       education: row.education,
-      other: row.other_exp,
+      other: row.other_exp + row.appliance,
     }
   };
 }
@@ -1147,7 +1476,7 @@ function renderYojitsu(){
 }
 function eventCompareRows(events,year,uptoMonth){
   const ytd=cat=>E.filter(x=>!x.deleted&&x.kind==="expense"&&x.category===cat&&x.date>=year+"-01"&&x.date<=year+"-"+String(uptoMonth).padStart(2,"0")+"-31").reduce((s,x)=>s+x.amount,0)/10000;
-  const map=[["住宅メンテ・税等",events.housing,"住宅"],["車両",events.car,"車両"],["教育",events.education,"教育"],["その他・特別",events.other,"特別支出"]];
+  const map=[["住宅メンテ・税等",events.housing,"住宅"],["車両",events.car,"車両"],["教育",events.education,"教育"],["その他・特別（家電含む）",events.other,"特別支出"]];
   return `<div class="brow total" style="grid-template-columns:1fr 90px 100px"><span class="bname">項目</span><span class="mini" style="text-align:right">年間プラン</span><span class="mini" style="text-align:right">実績(1-${uptoMonth}月)</span></div>`+
     map.map(([label,planV,cat])=>`<div class="brow" style="grid-template-columns:1fr 90px 100px"><span class="bname">${label}</span><span style="text-align:right">${planV.toFixed(0)}</span><span style="text-align:right">${ytd(cat).toFixed(0)}</span></div>`).join("");
 }
@@ -1161,41 +1490,87 @@ function bindYmNav(){
 }
 
 /* ========== シナリオ比較 ========== */
+function planSnapData(){ return JSON.parse(JSON.stringify(Object.assign({},S,{scenarios:undefined,activeScenarioId:undefined,kakeibo:undefined,_updatedAt:undefined}))); }
+function planStrip(d){ return JSON.stringify(Object.assign({},d,{scenarios:undefined,activeScenarioId:undefined,kakeibo:undefined,_updatedAt:undefined})); }
 function renderScenario(){
   const el=document.getElementById("tab-scenario");
   if(!Array.isArray(S.scenarios)) S.scenarios=[];
+  const esc=t=>String(t||"").replace(/</g,"&lt;");
+  const active=S.scenarios.find(x=>x.id===S.activeScenarioId)||null;
+  const dirty=active?planStrip(S)!==planStrip(active.data):true;
   const cur=computeCF();
-  const curEnd=cur.rows[cur.rows.length-1];
-  const curNeg=cur.rows.find(r=>r.netWorth<0);
   const rowsFor=snap=>{ const bak=S; try{ S=snap.data; return computeCF(); } finally{ S=bak; } };
+  const met=o=>{ const rows=o.rows, end=rows[rows.length-1];
+    const neg=rows.find(r=>r.netWorth<0);
+    return { peak:rows.reduce((a,r)=>Math.max(a,r.netWorth),-1e9),
+      negAge:neg?neg.primAge:null, final:end.netWorth,
+      a65:(rows.find(r=>r.primAge>=65)||end).netWorth };
+  };
+  const mCur=met(cur);
+  const list=S.scenarios.map((sn,i)=>({sn,m:met(rowsFor(sn)),col:catColor(i+1)}));
+  const allM=[mCur,...list.map(x=>x.m)];
+  const many=allM.length>1;
+  const anyNoNeg=allM.some(m=>m.negAge==null);
+  const bestNeg=anyNoNeg?null:Math.max(...allM.map(m=>m.negAge));
+  const best={a65:Math.max(...allM.map(m=>m.a65)),peak:Math.max(...allM.map(m=>m.peak)),final:Math.max(...allM.map(m=>m.final))};
+  const money=(v,isBest)=>`<td style="${v<0?"color:var(--neg)":(many&&isBest?"font-weight:700;color:var(--pos)":"")}">${MAN(v)}万</td>`;
+  const negTd=m=>{ const isBest=many&&(anyNoNeg?m.negAge==null:m.negAge===bestNeg);
+    return `<td style="${isBest?"font-weight:700;color:var(--pos)":""}">${m.negAge!=null?m.negAge+"歳":"なし ✓"}</td>`; };
+  const diffTd=m=>{ const d=m.final-mCur.final; if(Math.abs(d)<0.5) return `<td style="color:var(--sub)">±0</td>`;
+    return `<td style="color:${d>0?"var(--pos)":"var(--neg)"}">${d>0?"+":"−"}${MAN(Math.abs(d))}万</td>`; };
+  const dot=c=>`<i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${c};margin-right:6px;vertical-align:-1px"></i>`;
+  const curName=active?esc(active.name)+(dirty?"（編集あり）":""):"現在のプラン（未保存）";
   el.innerHTML=`
   <div class="card">
-    <h2>シナリオ比較</h2>
-    <p class="hint">今の前提を「スナップショット」として保存し、いろいろ変えた後の結果と見比べられます。「繰上返済したら」「配偶者がフルタイムに戻ったら」などを保存して並べてみてください。</p>
-    <button class="btn" id="snapSave">現在のプランを保存</button>
+    <h2>プランの保存と切り替え</h2>
+    <p class="hint">今の前提に名前を付けて保存し、複数のプランを切り替えながら比較できます。「切り替え」を押すと、編集中の内容は使用中のプランへ自動で上書き保存されてから、選んだプランに切り替わります（家計簿の記録は共通です）。</p>
+    <button class="btn" id="snapSave">現在のプランを別名で保存</button>
   </div>
   <div class="card">
-    <h2>比較</h2>
-    <div class="tblwrap"><table class="data"><thead><tr><th>プラン</th><th>ピーク資産</th><th>資産が尽きる</th><th>最終資産</th><th></th></tr></thead><tbody>
-      <tr><td>現在の設定</td><td>${MAN(cur.rows.reduce((a,r)=>Math.max(a,r.netWorth),-1e9))}万</td><td>${curNeg?curNeg.primAge+"歳":"なし"}</td><td class="${curEnd.netWorth<0?"neg":""}">${MAN(curEnd.netWorth)}万</td><td></td></tr>
-      ${S.scenarios.map(sn=>{ const o=rowsFor(sn); const end=o.rows[o.rows.length-1]; const neg=o.rows.find(r=>r.netWorth<0);
-        return `<tr><td>${(sn.name||"（無題）").replace(/</g,"&lt;")}<br><span class="mini">${sn.savedAt?sn.savedAt.slice(0,10):""}</span></td><td>${MAN(o.rows.reduce((a,r)=>Math.max(a,r.netWorth),-1e9))}万</td><td>${neg?neg.primAge+"歳":"なし"}</td><td class="${end.netWorth<0?"neg":""}">${MAN(end.netWorth)}万</td><td><button class="btn ghost sm" data-load="${sn.id}">現在に反映</button> <button class="btn danger sm" data-delsn="${sn.id}">×</button></td></tr>`;
+    <h2>プランの比較</h2>
+    <p class="hint">各列のいちばん良い値を<b style="color:var(--pos)">緑の太字</b>で表示します。「現在との差」は最終資産の差です。</p>
+    <div class="tblwrap"><table class="data"><thead><tr><th>プラン</th><th>65歳時点</th><th>ピーク資産</th><th>資産が尽きる</th><th>最終資産</th><th>現在との差</th><th></th></tr></thead><tbody>
+      <tr><td>${dot("var(--accent)")}<b>${curName}</b><br><span class="mini">いま表示中の内容</span></td>
+        ${money(mCur.a65,mCur.a65===best.a65)}${money(mCur.peak,mCur.peak===best.peak)}${negTd(mCur)}${money(mCur.final,mCur.final===best.final)}<td style="color:var(--sub)">—</td><td></td></tr>
+      ${list.map(({sn,m,col})=>{
+        const isActive=sn.id===S.activeScenarioId;
+        return `<tr><td>${dot(col)}${esc(sn.name||"（無題）")}${isActive?' <span class="tag">使用中</span>':""}<br><span class="mini">${sn.savedAt?sn.savedAt.slice(0,10):""}</span></td>
+          ${money(m.a65,m.a65===best.a65)}${money(m.peak,m.peak===best.peak)}${negTd(m)}${money(m.final,m.final===best.final)}${diffTd(m)}
+          <td style="white-space:nowrap">${isActive?"":`<button class="btn sm" data-load="${sn.id}">切り替え</button> `}<button class="btn danger sm" data-delsn="${sn.id}">×</button></td></tr>`;
       }).join("")}
     </tbody></table></div>
     ${S.scenarios.length?`<div class="chartbox" style="margin-top:14px">${scenarioChart(cur.rows,S.scenarios.map(sn=>rowsFor(sn).rows))}</div>
-      <div class="legend"><span><i style="background:var(--accent)"></i>現在</span>${S.scenarios.map((sn,i)=>`<span><i style="background:${catColor(i+1)}"></i>${(sn.name||"無題").replace(/</g,"&lt;")}</span>`).join("")}</div>`:`<p class="mini" style="margin-top:8px">保存したシナリオがありません。上の「現在のプランを保存」で追加してください。</p>`}
+      <div class="legend"><span><i style="background:var(--accent)"></i>${curName}</span>${list.map(({sn,col})=>`<span><i style="background:${col}"></i>${esc(sn.name||"無題")}</span>`).join("")}</div>`:`<p class="mini" style="margin-top:8px">保存したプランがありません。上の「現在のプランを別名で保存」で追加すると、比較グラフが表示されます。</p>`}
   </div>`;
   document.getElementById("snapSave").onclick=()=>{
     const name=(prompt("このプランの名前（例：現状維持、繰上返済あり）")||"").trim(); if(!name) return;
-    S.scenarios.push({id:uid(),name,savedAt:new Date().toISOString(),data:JSON.parse(JSON.stringify(Object.assign({},S,{scenarios:undefined})))});
+    const id=uid();
+    S.scenarios.push({id,name,savedAt:new Date().toISOString(),data:planSnapData()});
+    S.activeScenarioId=id;
     commit();
   };
   el.querySelectorAll("[data-load]").forEach(b=>b.onclick=()=>{
-    if(!confirm("このシナリオの内容を現在の設定に反映します。今の設定は上書きされます（必要なら先に保存してください）。よろしいですか？")) return;
-    const sn=S.scenarios.find(x=>x.id===b.dataset.load); if(!sn) return;
-    const keepScen=S.scenarios; S=JSON.parse(JSON.stringify(sn.data)); S.scenarios=keepScen; ensurePlanModel(); ensureKakeibo(); commit();
+    const target=S.scenarios.find(x=>x.id===b.dataset.load); if(!target) return;
+    if(dirty){
+      if(active){ active.data=planSnapData(); active.savedAt=new Date().toISOString(); }
+      else if(confirm("現在のプランは未保存です。名前を付けて保存してから切り替えますか？\n（キャンセル＝保存せずに切り替え。今の内容は失われます）")){
+        const name=(prompt("プラン名（例：現状維持）")||"").trim();
+        if(!name) return; // 中断
+        S.scenarios.push({id:uid(),name,savedAt:new Date().toISOString(),data:planSnapData()});
+      }
+    }
+    const keepScen=S.scenarios, keepK=S.kakeibo;
+    S=JSON.parse(JSON.stringify(target.data));
+    S.scenarios=keepScen; if(keepK) S.kakeibo=keepK; S.activeScenarioId=target.id;
+    ensurePlanModel(); ensureKakeibo(); commit();
   });
-  el.querySelectorAll("[data-delsn]").forEach(b=>b.onclick=()=>{ S.scenarios=S.scenarios.filter(x=>x.id!==b.dataset.delsn); commit(); });
+  el.querySelectorAll("[data-delsn]").forEach(b=>b.onclick=()=>{
+    const sn=S.scenarios.find(x=>x.id===b.dataset.delsn);
+    if(!confirm(`プラン「${sn?sn.name:""}」を削除しますか？`)) return;
+    S.scenarios=S.scenarios.filter(x=>x.id!==b.dataset.delsn);
+    if(S.activeScenarioId===b.dataset.delsn) delete S.activeScenarioId;
+    commit();
+  });
 }
 function scenarioChart(baseRows, others){
   const all=[baseRows,...others];
@@ -1240,6 +1615,13 @@ function renderTimeline(){
   });
   S.housing.maintenance.forEach(mt=>{ if(mt.annual<50) return;
     for(let a=mt.fromAge;a<=mt.toAge;a+=Math.max(1,mt.cycle)){ add(prim.birthYear+a,`${mt.name} ${MAN(mt.annual)}万`); }
+  });
+  // 電化製品の買い替え（10万円以上のみ表示）
+  const lastYear=rows.length?rows[rows.length-1].year:S.baseYear;
+  (S.appliances||[]).forEach(ap=>{
+    const by=+ap.boughtYear||0, ly=Math.max(1,+ap.lifeYears||10);
+    if(!by||+ap.price<10) return;
+    for(let y=by+ly;y<=lastYear;y+=ly){ if(y>=S.baseYear) add(y,`${ap.name}買替 ${MAN(ap.price)}万`); }
   });
   // 投資枯渇
   (assetInfo||[]).forEach(x=>{ if(x.depleteYear) add(x.depleteYear,`投資「${x.name}」枯渇`); });
@@ -2106,6 +2488,11 @@ function renderSettings(){
     <p class="mini" style="margin-top:10px">同期は「変更があってから数秒後」に自動でも実行されます。ライフプランの前提と家計簿の明細が同期対象です。</p>
   </div>
   <div class="card">
+    <h2>かんたん設定ガイド</h2>
+    <p class="hint">質問に答えるだけで、ライフプランの前提（家族・収入・住まい・生活費・資産・年金）をまとめて作成し直せます。作成すると今の前提は置き換わります（家計簿の明細はそのまま残ります）。</p>
+    <button class="btn ghost sm" id="setWizBtn">🪄 ガイドで設定し直す</button>
+  </div>
+  <div class="card">
     <h2>バックアップ</h2>
     <p class="hint">全データ（ライフプラン＋家計簿）をJSONファイルに書き出し・読み込みできます。</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -2148,6 +2535,7 @@ function renderSettings(){
     try{ const c=await getClient(); if(c) await c.auth.signOut(); notify("ログアウトしました"); updateAuthUI(); }catch(e){}
   };
   document.getElementById("syncBtn").onclick=()=>syncNow(false);
+  document.getElementById("setWizBtn").onclick=wzOpen;
   bindBackup();
   document.getElementById("forceUpd").onclick=async()=>{
     try{
@@ -2255,8 +2643,8 @@ document.getElementById("fileIn").onchange=e=>{
 };
 document.getElementById("resetBtn").onclick=()=>{
   if(!confirm("ライフプランの入力内容を初期値（平山様サンプル）に戻します。\n家計簿の明細・カテゴリ・固定費・目標額は消えません。よろしいですか？")) return;
-  const keep=S.kakeibo;      // 家計簿の設定はライフプランと独立なので引き継ぐ
-  S=seed(); S.kakeibo=keep; ensureKakeibo(); commit();
+  const keep=S.kakeibo, keepScen=S.scenarios; // 家計簿設定と保存済みプランは引き継ぐ
+  S=seed(); S.kakeibo=keep; if(Array.isArray(keepScen)) S.scenarios=keepScen; ensureKakeibo(); commit();
 };
 
 }
@@ -2270,6 +2658,14 @@ ensureKakeibo();   // 既存ユーザーのデータに家計簿設定を補完
 ensurePlanModel(); // 資産・年金・ローンの新項目を補完（旧データ移行）
 applyFixed();      // 起動時に、当月ぶんまでの固定費を計上
 render();
+// 初回起動（まっさらな新規ユーザー）だけ、設定ガイドを自動で案内
+const WZKEY="kakeibo_wizard_v1";
+function wizardSeen(){ try{ return !!localStorage.getItem(WZKEY); }catch(e){ return true; } }
+function markWizardSeen(){ try{ localStorage.setItem(WZKEY,"1"); }catch(e){} }
+if(!wizardSeen()){
+  markWizardSeen();
+  if(!S._updatedAt && (!E || !E.length)){ MODE="lifeplan"; settingsOpen=false; pCur="home"; render(); wzOpen(); }
+}
 // PWA（https配信時のみ有効。file://では静かにスキップ）
 function showUpdateBar(){
   if(document.getElementById("updBar")) return;
