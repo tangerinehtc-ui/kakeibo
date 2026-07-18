@@ -110,6 +110,17 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
   main{padding-bottom:90px}
   .brow{grid-template-columns:88px 92px 1fr;gap:6px}
 }
+.tl-row{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.tl-year{font-weight:600;text-align:center;color:var(--sub)}
+.tl-row.heavy .tl-year{color:var(--neg)}
+.tl-ev{display:inline-block;background:var(--chip);border-radius:6px;padding:2px 8px;font-size:12px;margin:2px 4px 2px 0}
+@media print{
+  header,nav,#gearBtn,.tools,#printBtn,#updBar,#storageWarn{display:none !important}
+  main{padding:0;max-width:none}
+  .card{border:1px solid #ccc;break-inside:avoid;box-shadow:none}
+  .chip:not(.on){display:none}
+  body{background:#fff}
+}
 @media(max-width:600px){ main{padding:10px} .card{padding:12px} }
 </style>
 </head>
@@ -124,20 +135,20 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 </header>
 <nav id="nav"></nav>
 <main>
+  <section class="tab" data-tab="khome" id="tab-khome"></section>
   <section class="tab" data-tab="kinput" id="tab-kinput"></section>
-  <section class="tab" data-tab="kcal" id="tab-kcal"></section>
-  <section class="tab" data-tab="kbudget" id="tab-kbudget"></section>
   <section class="tab" data-tab="kmanage" id="tab-kmanage"></section>
   <section class="tab" data-tab="home" id="tab-home"></section>
   <section class="tab" data-tab="plan" id="tab-plan"></section>
-  <section class="tab" data-tab="cf" id="tab-cf"></section>
-  <section class="tab" data-tab="charts" id="tab-charts"></section>
+  <section class="tab" data-tab="yojitsu" id="tab-yojitsu"></section>
+  <section class="tab" data-tab="analysis" id="tab-analysis"></section>
+  <section class="tab" data-tab="scenario" id="tab-scenario"></section>
   <section class="tab" data-tab="settings" id="tab-settings"></section>
 </main>
 
 <script>
 "use strict";
-const APP_VERSION = "2026.07.16-1";
+const APP_VERSION = "2026.07.18-2";
 const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
 const uid = () => Math.random().toString(36).slice(2,9);
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
@@ -163,7 +174,7 @@ const EDU_STAGES = [
 function seed(){
   return {
     baseYear:2026,
-    returnRate:3.0,
+    inflation:0,
     members:[
       {id:"self",  name:"ご本人", role:"self",   birthYear:1995, lifespan:90},
       {id:"spouse",name:"配偶者", role:"spouse", birthYear:1995, lifespan:100},
@@ -173,8 +184,8 @@ function seed(){
     incomes:[
       {id:uid(),memberId:"self",  type:"salary", endAge:65, points:[{age:27,annual:500},{age:64,annual:650}]},
       {id:uid(),memberId:"spouse",type:"salary", endAge:65, points:[{age:27,annual:500},{age:29,annual:400},{age:37,annual:250},{age:43,annual:400},{age:64,annual:600}]},
-      {id:uid(),memberId:"self",  type:"pension", startAge:65, annual:192},
-      {id:uid(),memberId:"spouse",type:"pension", startAge:65, annual:168}
+      {id:uid(),memberId:"self",  type:"pension", startAge:65, claimAge:65, annual:192},
+      {id:uid(),memberId:"spouse",type:"pension", startAge:65, claimAge:65, annual:168}
     ],
     living:[
       {from:27,to:54,monthly:18},
@@ -183,7 +194,7 @@ function seed(){
     ],
     housing:{
       rent:[{fromYear:2023,toYear:2023,monthly:8}],
-      loan:{on:true, principal:4860, rate:1.2, termYears:35, startYear:2024, deductOn:true, deductYears:13, deductRate:0.7, deductCap:35},
+      loan:{on:true, principal:4860, rate:1.2, termYears:35, startYear:2024, deductOn:true, deductYears:13, deductRate:0.7, deductCap:35, rate2:0, rate2From:0, rate3:0, rate3From:0, prepays:[]},
       maintenance:[
         {name:"固定資産税",annual:15,fromAge:28,toAge:100,cycle:1},
         {name:"火災保険料",annual:25,fromAge:28,toAge:100,cycle:5},
@@ -203,8 +214,8 @@ function seed(){
       {id:uid(),childId:"c2",independentAge:22,choices:{"未就学(0-2)":"保育園(認可)","未就学(3-5)":"幼稚園(私立)","小学校":"小学校(公立)","中学校":"中学校(公立)","高校":"高校(公立)","大学":"大学(私立文系)"}}
     ],
     assets:[
-      {id:uid(),name:"預貯金",balance:300},
-      {id:uid(),name:"つみたてNISA等",balance:36}
+      {id:uid(),name:"預貯金",type:"cash",balance:300,rate:0.1},
+      {id:uid(),name:"つみたてNISA等",type:"invest",balance:36,rate:3.0,monthly:1.5,accumEndAge:64,drawStartAge:65,drawMonthly:5}
     ]
   };
 }
@@ -231,6 +242,36 @@ function showStorageWarning(){
 function member(id){ return S.members.find(m=>m.id===id); }
 function ageInYear(m, year){ return year - m.birthYear; }
 
+/* ---------- プランデータの補完・旧形式からの移行 ---------- */
+function ensurePlanModel(){
+  if(S.inflation==null) S.inflation=0;
+  if(!Array.isArray(S.assets)) S.assets=[];
+  S.assets.forEach(a=>{
+    if(!a.id) a.id=uid();
+    if(a.type!=="invest"&&a.type!=="cash") a.type="cash"; // 旧形式は預貯金扱い
+    if(a.rate==null) a.rate=0;
+    if(a.type==="invest"){
+      if(a.monthly==null) a.monthly=0;
+      if(a.accumEndAge==null) a.accumEndAge=64;
+      if(a.drawStartAge==null) a.drawStartAge=65;
+      if(a.drawMonthly==null) a.drawMonthly=0;
+    }
+  });
+  (S.incomes||[]).forEach(inc=>{ if(inc.type==="pension"&&inc.claimAge==null) inc.claimAge=inc.startAge||65; });
+  const l=S.housing&&S.housing.loan;
+  if(l){
+    if(l.rate2==null){ l.rate2=0; l.rate2From=0; }
+    if(l.rate3==null){ l.rate3=0; l.rate3From=0; }
+    if(!Array.isArray(l.prepays)) l.prepays=[];
+  }
+}
+
+/* ---------- 年金の繰上げ・繰下げ（65歳基準／繰上げ-0.4%/月・繰下げ+0.7%/月） ---------- */
+function pensionFactor(claimAge){
+  const c=clamp(+claimAge||65,60,75);
+  return c>=65 ? 1+0.007*12*(c-65) : 1-0.004*12*(65-c);
+}
+
 /* ---------- 税・社会保険料（簡易・実効負担率） ---------- */
 function taxOn(annual){
   if(annual<=0) return 0;
@@ -256,13 +297,50 @@ function salaryAt(inc, age){
   return 0;
 }
 
-/* ---------- 住宅ローン（元利均等・年額） ---------- */
-function loanAnnual(loan){
-  if(!loan||!loan.on||loan.principal<=0||loan.termYears<=0) return 0;
-  const i=(loan.rate/100)/12, n=loan.termYears*12, P=loan.principal;
-  const m = i===0 ? P/n : P*i*Math.pow(1+i,n)/(Math.pow(1+i,n)-1);
-  return m*12; // 万円/年
+/* ---------- 住宅ローン（月次償還・段階金利・繰上返済対応） ---------- */
+function loanSchedule(loan, opt){
+  const res={pay:{},interest:{},balEnd:{},payoffYear:null,totalInterest:0,initialMonthly:0};
+  if(!loan||!loan.on||loan.principal<=0||loan.termYears<=0) return res;
+  const usePrepay=!(opt&&opt.noPrepay);
+  const n=loan.termYears*12;
+  let bal=loan.principal, pmt=0, curRate=null;
+  const rateAt=mi=>{ // mi=0始まりの月index。年目=floor(mi/12)+1
+    const yn=Math.floor(mi/12)+1;
+    let r=+loan.rate||0;
+    if(+loan.rate2>0&&+loan.rate2From>0&&yn>=+loan.rate2From) r=+loan.rate2;
+    if(+loan.rate3>0&&+loan.rate3From>0&&yn>=+loan.rate3From) r=+loan.rate3;
+    return r;
+  };
+  const calcPmt=(b,r,rem)=>{ const i=r/100/12; return i===0?b/rem:b*i/(1-Math.pow(1+i,-rem)); };
+  for(let mi=0;mi<n&&bal>0.0005;mi++){
+    const year=loan.startYear+Math.floor(mi/12);
+    // 年初の繰上返済
+    if(usePrepay&&mi%12===0&&Array.isArray(loan.prepays)){
+      loan.prepays.forEach(p=>{
+        if(+p.year===year&&+p.amount>0&&bal>0.0005){
+          const amt=Math.min(+p.amount,bal); bal-=amt;
+          res.pay[year]=(res.pay[year]||0)+amt;
+          if(p.type==="reduce"&&bal>0.0005) pmt=calcPmt(bal,rateAt(mi),n-mi); // 返済額軽減型
+        }
+      });
+      if(bal<=0.0005){ res.payoffYear=year; res.balEnd[year]=0; break; }
+    }
+    const r=rateAt(mi);
+    if(r!==curRate){ curRate=r; pmt=calcPmt(bal,r,n-mi); if(mi===0) res.initialMonthly=pmt; }
+    const i=r/100/12;
+    const int_=bal*i;
+    const principal=Math.max(0,Math.min(pmt-int_,bal));
+    bal-=principal;
+    res.pay[year]=(res.pay[year]||0)+int_+principal;
+    res.interest[year]=(res.interest[year]||0)+int_;
+    res.totalInterest+=int_;
+    res.balEnd[year]=bal;
+    if(bal<=0.0005){ res.payoffYear=year; res.balEnd[year]=0; break; }
+  }
+  if(res.payoffYear==null) res.payoffYear=loan.startYear+loan.termYears-1;
+  return res;
 }
+function loanAnnual(loan){ const s=loanSchedule(loan); return (s.initialMonthly||0)*12; }
 
 /* ---------- 教育費：子の年齢→年額 ---------- */
 function eduAt(edu, childAge){
@@ -276,23 +354,28 @@ function eduAt(edu, childAge){
   return 0;
 }
 
-/* ---------- キャッシュフロー計算エンジン ---------- */
+/* ---------- キャッシュフロー計算エンジン（現金と投資を分離） ---------- */
 function computeCF(){
+  ensurePlanModel();
   const prim = S.members.find(m=>m.role==="self") || S.members[0];
   // 世帯のCFは夫婦（本人・配偶者）の寿命まで。子の寿命では延長しない
   const adults = S.members.filter(m=>m.role==="self"||m.role==="spouse");
   const endYear = Math.max(...(adults.length?adults:S.members).map(m=>m.birthYear+m.lifespan));
-  const laY = loanAnnual(S.housing.loan);
   const loan=S.housing.loan;
-  const loanEnd = loan&&loan.on ? loan.startYear+loan.termYears-1 : -1;
-  const rate=(S.returnRate||0)/100;
+  const sched=loanSchedule(loan);
+  const infl=(+S.inflation||0)/100;
   const rows=[];
-  let netWorth = S.assets.reduce((s,a)=>s+(+a.balance||0),0);
-  const startNet=netWorth;
+  // 資産の内部状態（現金プール＋投資は銘柄ごと）
+  const cashAssets=S.assets.filter(a=>a.type!=="invest");
+  const iv=S.assets.filter(a=>a.type==="invest").map(a=>({a,bal:+a.balance||0,depleteYear:null}));
+  let cash=cashAssets.reduce((s,a)=>s+(+a.balance||0),0);
+  const cashRate=(cashAssets.length?(+cashAssets[0].rate||0):0)/100;
+  const startNet=cash+iv.reduce((s,x)=>s+x.bal,0);
 
   for(let year=S.baseYear; year<=endYear; year++){
     const primAge=ageInYear(prim,year);
     const ages={}; S.members.forEach(m=>{ ages[m.id]=ageInYear(m,year); });
+    const f=Math.pow(1+infl, year-S.baseYear); // インフレ係数
 
     // ----- 収入 -----
     let salary=0,pension=0,retire=0,other=0, taxableEarned=0, taxablePension=0;
@@ -301,68 +384,100 @@ function computeCF(){
       const a=ages[inc.memberId];
       if(a>m.lifespan) return;
       if(inc.type==="salary"){ const v=salaryAt(inc,a); salary+=v; taxableEarned+=v; }
-      else if(inc.type==="pension"){ if(a>=inc.startAge){ pension+=inc.annual; taxablePension+=inc.annual; } }
+      else if(inc.type==="pension"){
+        const ca=+inc.claimAge||inc.startAge||65;
+        if(a>=ca){ const v=(+inc.annual||0)*pensionFactor(ca); pension+=v; taxablePension+=v; }
+      }
       else if(inc.type==="retire"){ if(a===inc.age) retire+=inc.amount; }
       else if(inc.type==="other"){ if(a>=inc.startAge && a<=inc.endAge) other+=inc.annual; }
     });
     const incomeTotal=salary+pension+retire+other;
 
-    // ----- 支出 -----
-    // 生活費
+    // ----- 支出（生活費・教育費・イベントはインフレ反映。ローン・保険料は契約額のまま）-----
     let living=0;
-    for(const seg of S.living){ if(primAge>=seg.from&&primAge<=seg.to){ living=seg.monthly*12; break; } }
-    // 住宅費
+    for(const seg of S.living){ if(primAge>=seg.from&&primAge<=seg.to){ living=seg.monthly*12*f; break; } }
     let housing=0;
     for(const r of S.housing.rent){ if(year>=r.fromYear&&year<=r.toYear) housing+=r.monthly*12; }
-    if(loan&&loan.on&&year>=loan.startYear&&year<=loanEnd) housing+=laY;
+    housing+=sched.pay[year]||0;
     S.housing.maintenance.forEach(mt=>{
-      if(primAge>=mt.fromAge&&primAge<=mt.toAge&&((primAge-mt.fromAge)%mt.cycle===0)) housing+=mt.annual;
+      if(primAge>=mt.fromAge&&primAge<=mt.toAge&&((primAge-mt.fromAge)%mt.cycle===0)) housing+=mt.annual*f;
     });
-    // 住宅ローン控除（負の支出）
+    // 住宅ローン控除（年末残高×控除率）
     let deduct=0;
     if(loan&&loan.on&&loan.deductOn&&year>=loan.startYear&&year<loan.startYear+loan.deductYears){
-      deduct=Math.min(loan.deductCap, loan.principal*(loan.deductRate/100));
+      const balY=sched.balEnd[year]!=null?sched.balEnd[year]:0;
+      deduct=Math.min(loan.deductCap, balY*(loan.deductRate/100));
     }
-    // 汎用支出（車・その他・保険料 等）
     const cat={"車両費":0,"その他・将来の夢":0,"支払保険料":0,"教育・結婚資金":0};
     S.expenses.forEach(e=>{
       const t=member(e.targetId)||prim; const a=ages[t.id];
       if(a>=e.fromAge&&a<=e.toAge&&((a-e.fromAge)%e.cycle===0)){
-        cat[e.category]=(cat[e.category]||0)+e.amount;
+        const v=e.category==="支払保険料"?e.amount:e.amount*f;
+        cat[e.category]=(cat[e.category]||0)+v;
       }
     });
-    // 教育費
     let edu=0;
-    S.educations.forEach(ed=>{ const c=member(ed.childId); if(!c) return; edu+=eduAt(ed, ages[ed.childId]); });
+    S.educations.forEach(ed=>{ const c=member(ed.childId); if(!c) return; edu+=eduAt(ed, ages[ed.childId])*f; });
     cat["教育・結婚資金"]+=edu;
-    // 税・社会保険料
     const tax=taxOn(taxableEarned)+pensionTax(taxablePension);
 
     const expenseTotal = living+housing+cat["教育・結婚資金"]+cat["車両費"]+cat["その他・将来の夢"]+tax+cat["支払保険料"]-deduct;
     const balance = incomeTotal-expenseTotal;
-    const gain = Math.max(netWorth,0)*rate;
-    netWorth = netWorth+gain+balance;
+
+    // ----- 資産（投資は銘柄ごとに月次で複利・積立・取り崩し）-----
+    let contrib=0, withdraw=0;
+    iv.forEach(x=>{
+      const a=x.a, r=(+a.rate||0)/100/12;
+      for(let m=0;m<12;m++){
+        x.bal*=(1+r);
+        if(+a.monthly>0 && primAge<=(+a.accumEndAge||120)){ x.bal+=+a.monthly; contrib+=+a.monthly; }
+        if(+a.drawMonthly>0 && primAge>=(+a.drawStartAge||999) && x.bal>0){
+          const w=Math.min(+a.drawMonthly,x.bal); x.bal-=w; withdraw+=w;
+          if(x.bal<=0.0005 && x.depleteYear==null) x.depleteYear=year;
+        }
+      }
+    });
+    const cashGain=Math.max(cash,0)*cashRate;
+    cash=cash+cashGain+balance-contrib+withdraw;
+    // 現金が不足したら投資から追加で取り崩す
+    if(cash<0){
+      for(const x of iv){
+        if(cash>=0) break;
+        const take=Math.min(-cash,x.bal);
+        if(take>0){ x.bal-=take; cash+=take; withdraw+=take; if(x.bal<=0.0005&&x.depleteYear==null) x.depleteYear=year; }
+      }
+    }
+    const invest=iv.reduce((s,x)=>s+x.bal,0);
+    const netWorth=cash+invest;
 
     rows.push({
       year, primAge, ages,
       salary,pension,retire,other,incomeTotal,
       living, housing, education:cat["教育・結婚資金"], car:cat["車両費"],
       other_exp:cat["その他・将来の夢"], tax, insurance:cat["支払保険料"], deduct,
-      expenseTotal, balance, gain, netWorth
+      expenseTotal, balance, contrib, withdraw, cash, invest, netWorth
     });
   }
-  return {rows, startNet, prim};
+  const assetInfo=iv.map(x=>({id:x.a.id,name:x.a.name,depleteYear:x.depleteYear,finalBal:x.bal}));
+  return {rows, startNet, prim, assetInfo, sched};
 }
 
 /* ================= 描画（2モード構成） ================= */
 const UKEY="kakeibo_ui_v1";
 let UI=(function(){ try{const r=localStorage.getItem(UKEY); if(r) return JSON.parse(r);}catch(e){} return {}; })();
 let MODE=UI.mode==="lifeplan"?"lifeplan":"kakeibo";
-let kCur=UI.kCur||"kinput", pCur=UI.pCur||"home", planSub=UI.planSub||"family";
+let kCur=UI.kCur||"khome", pCur=UI.pCur||"home", planSub=UI.planSub||"family";
+let kHomeSub=UI.kHomeSub||"cal";
+// 旧構成（4タブ）からの移行
+if(kCur==="kcal"){ kCur="khome"; kHomeSub="cal"; }
+if(kCur==="kbudget"){ kCur="khome"; kHomeSub="budget"; }
+if(!["khome","kinput","kmanage"].includes(kCur)) kCur="khome";
+let tMetric=UI.tMetric||"savings", tMode=UI.tMode||"month", tFrom=UI.tFrom||"", tTo=UI.tTo||"";
 let settingsOpen=false;
-function saveUI(){ try{ localStorage.setItem(UKEY,JSON.stringify({mode:MODE,kCur,pCur,planSub})); }catch(e){} }
-const KTABS=[["kinput","入力"],["kcal","カレンダー"],["kbudget","予算"],["kmanage","管理"]];
-const PTABS=[["home","サマリー"],["plan","前提の入力"],["cf","キャッシュフロー表"],["charts","グラフ"]];
+let anaSub=UI.anaSub||"cf", yMonth=UI.yMonth||todayStr().slice(0,7);
+function saveUI(){ try{ localStorage.setItem(UKEY,JSON.stringify({mode:MODE,kCur,pCur,planSub,kHomeSub,tMetric,tMode,tFrom,tTo,anaSub,yMonth})); }catch(e){} }
+const KTABS=[["khome","ホーム"],["kinput","入力"],["kmanage","管理"]];
+const PTABS=[["home","サマリー"],["plan","前提の入力"],["yojitsu","予実"],["analysis","分析"],["scenario","シナリオ"]];
 function curTab(){ return settingsOpen?"settings":(MODE==="kakeibo"?kCur:pCur); }
 function render(){
   ensureKakeibo();
@@ -371,14 +486,14 @@ function render(){
   if(mk){ mk.classList.toggle("on",MODE==="kakeibo"&&!settingsOpen); mp.classList.toggle("on",MODE==="lifeplan"&&!settingsOpen); }
   buildNav();
   const cur=curTab();
+  if(cur==="khome") renderKHome();
   if(cur==="kinput") renderKInput();
-  if(cur==="kcal") renderKCal();
-  if(cur==="kbudget") renderKBudget();
   if(cur==="kmanage") renderKManage();
   if(cur==="home") renderHome();
   if(cur==="plan") renderPlan();
-  if(cur==="cf") renderCF();
-  if(cur==="charts") renderCharts();
+  if(cur==="yojitsu") renderYojitsu();
+  if(cur==="analysis") renderAnalysis();
+  if(cur==="scenario") renderScenario();
   if(cur==="settings") renderSettings();
   document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("on",t.dataset.tab===cur));
   saveUI();
@@ -403,14 +518,41 @@ function renderPlan(){
   if(planSub==="expense") renderExpense();
   if(planSub==="assets") renderAssets();
 }
+function renderAnalysis(){
+  const el=document.getElementById("tab-analysis");
+  const SUBS=[["cf","キャッシュフロー表"],["charts","グラフ"],["timeline","年表"]];
+  el.innerHTML=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 14px">
+    <div class="chips" style="flex:1">${SUBS.map(([id,l])=>`<button class="chip ${anaSub===id?"on":""}" data-as="${id}">${l}</button>`).join("")}</div>
+    <button class="btn ghost sm" id="printBtn">印刷 / PDF保存</button>
+  </div><div id="anaBody"></div>`;
+  el.querySelectorAll("[data-as]").forEach(b=>b.onclick=()=>{ anaSub=b.dataset.as; render(); });
+  document.getElementById("printBtn").onclick=()=>window.print();
+  if(anaSub==="cf") renderCF();
+  if(anaSub==="charts") renderCharts();
+  if(anaSub==="timeline") renderTimeline();
+}
+function renderKHome(){
+  const el=document.getElementById("tab-khome");
+  const SUBS=[["cal","カレンダー"],["budget","予算"],["pie","収支"],["trend","推移"]];
+  el.innerHTML=`<div class="chips" style="margin:4px 0 14px">${SUBS.map(([id,l])=>`<button class="chip ${kHomeSub===id?"on":""}" data-hs="${id}">${l}</button>`).join("")}</div><div id="khomeBody"></div>`;
+  el.querySelectorAll("[data-hs]").forEach(b=>b.onclick=()=>{ kHomeSub=b.dataset.hs; render(); });
+  if(kHomeSub==="cal") renderKCal();
+  if(kHomeSub==="budget") renderKBudget();
+  if(kHomeSub==="pie") renderKPie();
+  if(kHomeSub==="trend") renderKTrend();
+}
 
 /* ---------- ホーム ---------- */
 function renderHome(){
-  const {rows,startNet}=computeCF();
+  const {rows,startNet,prim,assetInfo}=computeCF();
   const el=document.getElementById("tab-home");
   const peak=rows.reduce((a,r)=>r.netWorth>a.netWorth?r:a,rows[0]);
   const firstNeg=rows.find(r=>r.netWorth<0);
-  const lifeBal=rows.reduce((s,r)=>s+r.balance,0);
+  const firstCashNeg=rows.find(r=>r.cash<0);
+  const warns=[];
+  if(firstCashNeg&&!firstNeg) warns.push(`△ ${firstCashNeg.primAge}歳（${firstCashNeg.year}年）に現金が不足します（投資の取り崩しで補填する試算です）`);
+  (assetInfo||[]).forEach(x=>{ if(x.depleteYear) warns.push(`⚠ 投資「${x.name}」が${prim?ageInYear(prim,x.depleteYear):"—"}歳（${x.depleteYear}年）で枯渇します`); });
+  if(+S.inflation>0) warns.push(`物価上昇率 ${S.inflation}%/年 を支出に反映中`);
   const end=rows[rows.length-1];
   el.innerHTML=`
   <div class="card">
@@ -423,6 +565,7 @@ function renderHome(){
       <div class="kpi"><div class="lab">最終年の資産</div><div class="val ${end.netWorth<0?"warn":""}">${MAN(end.netWorth)}<span class="mini"> 万円</span></div></div>
     </div>
     ${firstNeg?`<p class="hint" style="color:var(--warn);margin-top:12px">⚠ ${firstNeg.primAge}歳（${firstNeg.year}年）で資産がマイナスになります。収入・支出・前提を見直してみてください。</p>`:`<p class="hint" style="color:var(--pos);margin-top:12px">✓ 試算期間中、資産はプラスを維持できています。</p>`}
+    ${warns.length?`<p class="mini" style="margin-top:6px">${warns.join("<br>")}</p>`:""}
   </div>
   <div class="card">
     <h2>資産残高の推移</h2>
@@ -433,7 +576,9 @@ function renderHome(){
     <p class="hint">「前提の入力」タブで家族・収入・支出・資産を入力すると、キャッシュフロー表とグラフが自動で再計算されます。前提を変えるたびにこのサマリーが更新されるので、「住宅ローンを繰り上げたら」「配偶者がフルタイムに戻ったら」といった見直しを試せます。毎日の記録はヘッダーの「家計簿」から。バックアップは右上の⚙設定にあります。</p>
     <details class="help"><summary>試算の前提について</summary>
     <p class="mini">・税金/社会保険料は年収帯ごとの実効負担率（給与8〜33%、年金10%）で概算しています。<br>
-    ・資産は毎年、前年残高に運用利回り（資産・前提タブで設定）を掛けて増やし、その年の収支差額を加減します。使わなかったお金（貯蓄・積立）は自動的に資産として累積します。<br>
+    ・資産は「現金」と「投資」を分けて計算します。投資は資産ごとの利回りで月次複利、毎月の積立は現金から自動振替、取り崩しは現金に入ります。赤字の年は現金→投資の順に取り崩します。<br>
+    ・物価上昇率を設定すると、生活費・教育費・イベント支出に毎年反映されます（ローン返済・保険料は契約額のまま）。<br>
+    ・年金は65歳基準の額に、繰上げ-0.4%/月・繰下げ+0.7%/月を掛けて調整します。<br>
     ・年齢は「年 − 生年」で計算（誕生月は考慮しません）。実際の数値を保証するものではありません。</p></details>
   </div>`;
 }
@@ -444,14 +589,13 @@ function renderFamily(){
   el.innerHTML=`<div class="card"><h2>基本設定</h2>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));max-width:420px">
       <div><label class="f">試算の基準年</label><input type="number" id="baseYear" value="${S.baseYear}"></div>
-      <div><label class="f">資産運用利回り(%)</label><input type="number" step="0.1" id="returnRate" value="${S.returnRate}"></div>
-    </div></div>
+    </div>
+    <p class="mini" style="margin-top:6px">運用利回りは「資産」タブで資産ごとに、物価上昇率も「資産」タブで設定します。</p></div>
     <div class="card"><h2>家族構成</h2>
     <p class="hint">続柄「本人」の年齢を基準に生活費などを計算します。子はここに追加すると教育費タブに反映されます。</p>
     <div id="memList"></div>
     <button class="btn ghost sm addbtn" id="addMem">+ メンバーを追加</button></div>`;
   document.getElementById("baseYear").onchange=e=>{S.baseYear=+e.target.value;commit();};
-  document.getElementById("returnRate").onchange=e=>{S.returnRate=+e.target.value;commit();};
   const ml=document.getElementById("memList");
   S.members.forEach(m=>{
     const d=document.createElement("div"); d.className="itemrow"; d.style.gridTemplateColumns="1.4fr 1fr 1fr 1fr auto";
@@ -509,9 +653,11 @@ function incomeCard(inc){
       <button class="btn ghost sm" data-pt>+ 点を追加</button>
       <div style="margin-top:8px;max-width:160px"><label class="f">就業終了年齢</label><input type="number" data-k="endAge" value="${inc.endAge}"></div>`;
   } else if(inc.type==="pension"){
-    body=`<div class="seg"><div><label class="f">受給開始年齢</label><input type="number" data-k="startAge" value="${inc.startAge}"></div>
-      <div><label class="f">年額(万円)</label><input type="number" data-k="annual" value="${inc.annual}"></div></div>
-      <p class="mini">ねんきん定期便の見込額（年額）を入力するのが確実です。</p>`;
+    const ca=+inc.claimAge||65, pf=pensionFactor(ca), adj=(+inc.annual||0)*pf;
+    body=`<div class="seg"><div><label class="f">65歳基準の年額(万円)</label><input type="number" data-k="annual" value="${inc.annual}"></div>
+      <div><label class="f">受給開始年齢(60〜75)</label><input type="number" data-k="claimAge" value="${ca}" min="60" max="75"></div></div>
+      <p class="mini">ねんきん定期便の見込額（65歳時点・年額）を入力。繰上げは月-0.4%・繰下げは月+0.7%で自動調整 →
+      <b>この設定では年${MAN(adj)}万円（${Math.round(pf*100)}%）</b>${ca!==65?`／${ca<65?"繰上げ":"繰下げ"}${Math.abs(ca-65)}年`:""}</p>`;
   } else if(inc.type==="retire"){
     body=`<div class="seg"><div><label class="f">受取年齢</label><input type="number" data-k="age" value="${inc.age}"></div>
       <div><label class="f">金額(万円)</label><input type="number" data-k="amount" value="${inc.amount}"></div></div>`;
@@ -614,6 +760,18 @@ function renderHousing(box){
         <div><label class="f">控除率(%)</label><input type="number" step="0.1" id="d_rate" value="${loan.deductRate}"></div>
         <div><label class="f">上限(万円/年)</label><input type="number" id="d_cap" value="${loan.deductCap}"></div>
       </div>
+      <div class="mini" style="margin:14px 0 6px"><b>金利の変更（段階金利・変動金利の上昇シナリオ）</b></div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(110px,1fr))">
+        <div><label class="f">金利2(%)</label><input type="number" step="0.01" id="l_rate2" value="${loan.rate2||0}"></div>
+        <div><label class="f">何年目から</label><input type="number" id="l_rate2From" value="${loan.rate2From||0}"></div>
+        <div><label class="f">金利3(%)</label><input type="number" step="0.01" id="l_rate3" value="${loan.rate3||0}"></div>
+        <div><label class="f">何年目から</label><input type="number" id="l_rate3From" value="${loan.rate3From||0}"></div>
+      </div>
+      <p class="mini">0のままなら変更なし。例：金利2を1.8%・11年目からにすると、将来の金利上昇シナリオを試せます。</p>
+      <div class="mini" style="margin:14px 0 6px"><b>繰上返済</b></div>
+      <div id="prepayList"></div>
+      <button class="btn ghost sm" id="addPrepay">+ 繰上返済を追加</button>
+      <div class="mini" id="loanSummary" style="margin-top:10px"></div>
     </div>
     <div class="mini" style="margin:14px 0 6px"><b>住宅の維持費</b>（固定資産税・保険・メンテ 等／本人年齢基準）</div>
     <div id="maintList"></div><button class="btn ghost sm" id="addMaint">+ 維持費</button>`;
@@ -628,9 +786,32 @@ function renderHousing(box){
   box.querySelector("#addRent").onclick=()=>{h.rent.push({fromYear:S.baseYear,toYear:S.baseYear+1,monthly:8});commit();};
   box.querySelector("#loanOn").onchange=e=>{loan.on=e.target.checked;commit();};
   box.querySelector("#dedOn").onchange=e=>{loan.deductOn=e.target.checked;commit();};
-  [["l_principal","principal"],["l_rate","rate"],["l_term","termYears"],["l_start","startYear"],["d_years","deductYears"],["d_rate","deductRate"],["d_cap","deductCap"]].forEach(([id,k])=>{
+  [["l_principal","principal"],["l_rate","rate"],["l_term","termYears"],["l_start","startYear"],["d_years","deductYears"],["d_rate","deductRate"],["d_cap","deductCap"],["l_rate2","rate2"],["l_rate2From","rate2From"],["l_rate3","rate3"],["l_rate3From","rate3From"]].forEach(([id,k])=>{
     const inp=box.querySelector("#"+id); if(inp) inp.onchange=e=>{loan[k]=+e.target.value;commit();};
   });
+  // 繰上返済リスト＋利息サマリー
+  const ppl=box.querySelector("#prepayList");
+  if(ppl){
+    if(!(loan.prepays||[]).length) ppl.innerHTML=`<p class="mini">まだ登録がありません。</p>`;
+    (loan.prepays||[]).forEach(p=>{
+      const row=document.createElement("div"); row.className="seg";
+      row.innerHTML=`<input type="number" value="${p.year}" data-k="year" style="width:90px"><span class="mini">年に</span>
+        <input type="number" value="${p.amount}" data-k="amount" style="width:90px"><span class="mini">万円</span>
+        <select data-k="type" style="width:150px"><option value="shorten"${p.type!=="reduce"?" selected":""}>期間短縮型</option><option value="reduce"${p.type==="reduce"?" selected":""}>返済額軽減型</option></select>
+        <button class="btn danger sm">×</button>`;
+      row.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{ p[inp.dataset.k]=inp.dataset.k==="type"?e.target.value:+e.target.value; commit(); });
+      row.querySelector(".danger").onclick=()=>{ loan.prepays=loan.prepays.filter(x=>x!==p); commit(); };
+      ppl.appendChild(row);
+    });
+    box.querySelector("#addPrepay").onclick=()=>{ loan.prepays.push({id:uid(),year:(loan.startYear||S.baseYear)+5,amount:100,type:"shorten"}); commit(); };
+    const s1=loanSchedule(loan), s0=loanSchedule(loan,{noPrepay:true});
+    let sum=`総支払利息: <b>${MAN(s1.totalInterest)}万円</b>　／　完済: <b>${s1.payoffYear}年</b>`;
+    if((loan.prepays||[]).some(p=>+p.amount>0)){
+      sum+=`<br>繰上返済の効果: 利息 <b style="color:var(--pos)">−${MAN(s0.totalInterest-s1.totalInterest)}万円</b>`;
+      if(s1.payoffYear<s0.payoffYear) sum+=`、完済 <b style="color:var(--pos)">${s0.payoffYear-s1.payoffYear}年前倒し</b>（${s0.payoffYear}年→${s1.payoffYear}年）`;
+    }
+    const ls=box.querySelector("#loanSummary"); if(ls) ls.innerHTML=sum;
+  }
   const mtl=box.querySelector("#maintList");
   h.maintenance.forEach(mt=>{
     const row=document.createElement("div"); row.className="seg";
@@ -681,51 +862,89 @@ function expCard(e){
   return d;
 }
 
-/* ---------- 資産・前提 ---------- */
+/* ---------- 資産・投資 ---------- */
 function renderAssets(){
+  ensurePlanModel();
   const el=document.getElementById("planBody");
-  el.innerHTML=`<div class="card"><h2>投資の運用利回り</h2>
-    <p class="hint">資産全体に毎年かかる想定利回りです。ここを変えると「もっと低リスクで運用したら」「NISAで年◯%回せたら」といった前提の見直しがすぐ試せます。</p>
+  const prim=S.members.find(m=>m.role==="self")||S.members[0];
+  let info={};
+  try{ computeCF().assetInfo.forEach(x=>{ info[x.id]=x; }); }catch(e){}
+  const total=S.assets.reduce((s,a)=>s+(+a.balance||0),0);
+  el.innerHTML=`
+  <div class="card"><h2>物価上昇率（インフレ）</h2>
+    <p class="hint">生活費・教育費・車や旅行などの支出に、毎年この率の物価上昇を反映します（住宅ローン返済額・保険料は契約額のため対象外）。</p>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <input type="number" step="0.1" id="returnRateA" value="${S.returnRate}" style="max-width:120px;font-size:20px;font-weight:600">
+      <input type="number" step="0.1" id="inflIn" value="${+S.inflation||0}" style="max-width:110px;font-size:18px;font-weight:600">
       <span class="mini">％／年</span>
-      <div style="display:flex;gap:6px;margin-left:6px;flex-wrap:wrap">
-        ${[0,1,3,5,7].map(v=>`<button class="btn ghost sm" data-rr="${v}">${v}%</button>`).join("")}
-      </div>
+      ${[0,1,1.5,2].map(v=>`<button class="btn ghost sm" data-infl="${v}">${v}%</button>`).join("")}
     </div>
-    <p class="mini" style="margin-top:8px">目安：預貯金のみ 0〜0.2%／バランス型 2〜4%／全世界株インデックス 4〜6%（過去実績、将来を保証するものではありません）</p>
-    </div>
-  <div class="card"><h2>現在の資産</h2>
-    <p class="hint">預貯金・投資などの現在残高を入力します。合計がシミュレーションの開始資産になり、毎年ここに上の運用利回りが掛かります。</p>
+    <p class="mini" style="margin-top:6px">目安: 日銀の物価目標は2%。1%でも30年後の生活費は約1.35倍になります。0なら従来どおり物価一定の試算です。</p>
+  </div>
+  <div class="card"><h2>資産・投資</h2>
+    <p class="hint">「投資」は毎月の積立と、老後の取り崩しまで設定できます。取り崩し中も残りの残高には利回りが掛かり続けます。積立は現金から自動で振り替えられます。</p>
     <div id="asList"></div>
-    <button class="btn ghost sm addbtn" id="addAs">+ 資産を追加</button>
-    <div class="mini" style="margin-top:10px">合計: <b>${MAN(S.assets.reduce((s,a)=>s+(+a.balance||0),0))} 万円</b>　／　運用利回り: <b>${S.returnRate}%</b></div>
-    </div>`;
-  const rrA=document.getElementById("returnRateA");
-  rrA.onchange=e=>{ S.returnRate=+e.target.value; commit(); };
-  el.querySelectorAll("[data-rr]").forEach(b=>b.onclick=()=>{ S.returnRate=+b.dataset.rr; commit(); });
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn ghost sm" id="addCash">+ 預貯金</button>
+      <button class="btn ghost sm" id="addInv">+ 投資（NISA・iDeCo等）</button>
+    </div>
+    <div class="mini" style="margin-top:10px">現在の資産合計: <b>${MAN(total)} 万円</b></div>
+  </div>`;
+  document.getElementById("inflIn").onchange=e=>{ S.inflation=Math.max(0,+e.target.value||0); commit(); };
+  el.querySelectorAll("[data-infl]").forEach(b=>b.onclick=()=>{ S.inflation=+b.dataset.infl; commit(); });
   const al=document.getElementById("asList");
   S.assets.forEach(a=>{
-    const r=document.createElement("div"); r.className="seg";
-    r.innerHTML=`<input type="text" value="${a.name}" data-k="name" style="width:180px"><input type="number" value="${a.balance}" data-k="balance"><span class="mini">万円</span><button class="btn danger sm">×</button>`;
-    r.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{a[inp.dataset.k]= inp.dataset.k==="name"?e.target.value:+e.target.value;commit();});
-    r.querySelector(".danger").onclick=()=>{S.assets=S.assets.filter(x=>x!==a);commit();};
-    al.appendChild(r);
+    const inv=a.type==="invest";
+    const d=document.createElement("div"); d.className="itemrow"; d.style.display="block";
+    let note="";
+    if(inv){
+      const inf=info[a.id];
+      if(inf && +a.drawMonthly>0){
+        note=inf.depleteYear
+          ? `この条件だと <b style="color:var(--warn)">${prim?ageInYear(prim,inf.depleteYear):"—"}歳（${inf.depleteYear}年）で枯渇</b>します。積立額・取り崩し額・利回りを変えると即座に再計算されます。`
+          : `この条件なら<b style="color:var(--pos)">寿命まで持ちます</b>（試算最終年の残高 約${MAN(inf.finalBal)}万円）`;
+      } else if(+a.monthly>0){
+        note="取り崩し額が0のため、積み立てる一方の想定です。老後に使うなら取り崩しも設定してみてください。";
+      }
+    }
+    d.innerHTML=`
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <span class="tag">${inv?"投資":"預貯金"}</span>
+        <input type="text" data-k="name" value="${(a.name||"").replace(/"/g,"&quot;")}" style="max-width:180px">
+        <button class="btn danger sm" data-rm style="margin-left:auto">×</button>
+      </div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
+        <div><label class="f">現在の残高（万円）</label><input type="number" data-k="balance" value="${+a.balance||0}"></div>
+        <div><label class="f">想定利回り（%/年）</label><input type="number" step="0.1" data-k="rate" value="${+a.rate||0}"></div>
+        ${inv?`
+        <div><label class="f">毎月の積立（万円）</label><input type="number" step="0.1" data-k="monthly" value="${+a.monthly||0}"></div>
+        <div><label class="f">積立終了年齢</label><input type="number" data-k="accumEndAge" value="${+a.accumEndAge||64}"></div>
+        <div><label class="f">取り崩し開始年齢</label><input type="number" data-k="drawStartAge" value="${+a.drawStartAge||65}"></div>
+        <div><label class="f">毎月の取り崩し（万円）</label><input type="number" step="0.1" data-k="drawMonthly" value="${+a.drawMonthly||0}"></div>`:""}
+      </div>
+      ${note?`<p class="mini" style="margin-top:8px">${note}</p>`:""}`;
+    d.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
+      const k=inp.dataset.k; a[k]=k==="name"?e.target.value:+e.target.value; commit();
+    });
+    d.querySelector("[data-rm]").onclick=()=>{ if(!confirm(`「${a.name}」を削除しますか？`)) return; S.assets=S.assets.filter(x=>x!==a); commit(); };
+    al.appendChild(d);
   });
-  document.getElementById("addAs").onclick=()=>{S.assets.push({id:uid(),name:"資産",balance:0});commit();};
+  document.getElementById("addCash").onclick=()=>{ S.assets.push({id:uid(),name:"預貯金",type:"cash",balance:0,rate:0}); commit(); };
+  document.getElementById("addInv").onclick=()=>{ S.assets.push({id:uid(),name:"投資",type:"invest",balance:0,rate:3,monthly:1,accumEndAge:64,drawStartAge:65,drawMonthly:0}); commit(); };
 }
 
 /* ---------- キャッシュフロー表 ---------- */
 function renderCF(){
   const {rows}=computeCF();
-  const el=document.getElementById("tab-cf");
+  const el=document.getElementById("anaBody");
   const R=[
     ["収入：給与・退職金","salary","in"],["収入：年金","pension","in"],["収入：その他","other","in"],
     ["収入合計","incomeTotal","tot"],
     ["生活費","living","ex"],["住宅費","housing","ex"],["教育・結婚","education","ex"],
     ["車両費","car","ex"],["その他・将来の夢","other_exp","ex"],["税・社保","tax","ex"],["支払保険料","insurance","ex"],
     ["支出合計","expenseTotal","tot"],
-    ["収支差額","balance","bal"],["資産残高","netWorth","net"]
+    ["収支差額","balance","bal"],
+    ["投資への積立","contrib","ex"],["投資の取り崩し","withdraw","in"],
+    ["現金残高","cash","net"],["投資残高","invest","net"],["資産合計","netWorth","net"]
   ];
   let head=`<tr><th>項目 ＼ 年</th>`+rows.map(r=>`<th class="${r.netWorth<0?"negyear":""}">${r.year}<br><span class="mini">${r.primAge}歳</span></th>`).join("")+`</tr>`;
   let body="";
@@ -746,7 +965,7 @@ function renderCF(){
 /* ---------- グラフ ---------- */
 function renderCharts(){
   const {rows}=computeCF();
-  const el=document.getElementById("tab-charts");
+  const el=document.getElementById("anaBody");
   el.innerHTML=`
     <div class="card"><h2>資産残高の推移</h2><div class="chartbox">${lineChart(rows)}</div></div>
     <div class="card"><h2>年度別の収支差額</h2><div class="chartbox">${balanceBars(rows)}</div>
@@ -775,11 +994,19 @@ function lineChart(rows){
   }
   const neg=rows.find(r=>r.netWorth<0);
   let marker = neg?`<line x1="${X(neg.primAge)}" y1="${pad.t}" x2="${X(neg.primAge)}" y2="${h-pad.b}" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="4 3"/><text x="${X(neg.primAge)+4}" y="${pad.t+12}" font-size="11" fill="var(--warn)">${neg.primAge}歳で資産0</text>`:"";
+  // 投資部分をエリア表示（現金との内訳が見える）
+  let investArea="", legend="";
+  if(rows[0]&&rows[0].invest!=null){
+    const pts=rows.map(r=>`${X(r.primAge).toFixed(1)},${Y(Math.max(0,r.invest)).toFixed(1)}`).join(" ");
+    investArea=`<polygon points="${X(rows[0].primAge).toFixed(1)},${zeroY.toFixed(1)} ${pts} ${X(rows[rows.length-1].primAge).toFixed(1)},${zeroY.toFixed(1)}" fill="var(--accent2)" opacity="0.25"/>`;
+    legend=`<div class="legend"><span><i style="background:var(--accent)"></i>資産合計（現金＋投資）</span><span><i style="background:var(--accent2);opacity:.45"></i>うち投資</span></div>`;
+  }
   return `<svg width="${w}" height="${h}" role="img" style="max-width:none">
     ${grid}${xlab}
+    ${investArea}
     <line x1="${pad.l}" y1="${zeroY}" x2="${w-pad.r}" y2="${zeroY}" stroke="var(--sub)" stroke-width="1"/>
     <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2"/>
-    ${marker}</svg>`;
+    ${marker}</svg>`+legend;
 }
 function balanceBars(rows){
   const step=Math.max(6,Math.floor(680/rows.length));
@@ -824,10 +1051,221 @@ function stackedExpense(rows){
   return `<svg width="${w}" height="${h}" role="img" style="max-width:none">${grid}${bars}<text x="${pad.l}" y="${h-6}" font-size="11" fill="var(--sub)">（本人年齢・万円/年）</text></svg>`;
 }
 
+/* ========== 予実チェック ========== */
+// ある年の「月次プラン（万円/月）」を経常項目とイベントに分けて返す
+function monthlyPlan(year){
+  const {rows,sched}=computeCF();
+  const row=rows.find(r=>r.year===year);
+  if(!row) return null;
+  const loan=S.housing.loan;
+  let rentLoan=0;
+  for(const r of S.housing.rent){ if(year>=r.fromYear&&year<=r.toYear) rentLoan+=r.monthly*12; }
+  rentLoan+=sched.pay[year]||0;
+  const incomeNet=Math.max(0,row.incomeTotal-row.tax);
+  return {
+    row,
+    recur:{
+      income: incomeNet/12,
+      living: row.living/12,
+      housing: rentLoan/12,
+      insurance: row.insurance/12,
+      invest: row.contrib/12,
+    },
+    // イベント（年額）: 住宅維持・車・教育・その他の夢
+    events:{
+      housing: row.housing - rentLoan,
+      car: row.car,
+      education: row.education,
+      other: row.other_exp,
+    }
+  };
+}
+function renderYojitsu(){
+  const el=document.getElementById("tab-yojitsu");
+  ensureKakeibo();
+  const year=+yMonth.slice(0,4);
+  const plan=monthlyPlan(year);
+  const monthList=E.filter(x=>!x.deleted&&x.date&&x.date.startsWith(yMonth));
+  const LS=livingSet();
+  const aExp=cat=>monthList.filter(x=>x.kind==="expense"&&x.category===cat).reduce((s,x)=>s+x.amount,0);
+  const actual={
+    income: monthList.filter(x=>x.kind==="income").reduce((s,x)=>s+x.amount,0)/10000,
+    living: monthList.filter(x=>x.kind==="expense"&&LS.has(x.category)).reduce((s,x)=>s+x.amount,0)/10000,
+    housing: aExp("住宅")/10000,
+    insurance: aExp("保険")/10000,
+    invest: aExp(INVEST_CAT)/10000,
+  };
+  const [yy,mm]=yMonth.split("-");
+  if(!plan){
+    el.innerHTML=`<div class="card">${ymNavHtml("yPrev","yNext",yy+"年"+(+mm)+"月")}<p class="mini" style="margin-top:12px">${year}年はライフプランの試算期間外です。</p></div>`;
+    bindYmNav(); return;
+  }
+  const cmpRow=(label,planV,actualV,goodWhenActualHigher)=>{
+    const diff=actualV-planV;
+    const warn=Math.abs(diff)>=Math.max(1,planV*0.1) && (goodWhenActualHigher?diff<0:diff>0);
+    const col=warn?"var(--neg)":"var(--sub)";
+    return `<div class="brow" style="grid-template-columns:1fr 78px 78px 90px">
+      <span class="bname">${label}</span>
+      <span style="text-align:right">${planV.toFixed(1)}</span>
+      <span style="text-align:right">${actualV.toFixed(1)}</span>
+      <span style="text-align:right;color:${col}">${diff>=0?"+":""}${diff.toFixed(1)}${warn?" ⚠":""}</span>
+    </div>`;
+  };
+  const planSave=plan.recur.income-plan.recur.living-plan.recur.housing-plan.recur.insurance;
+  const actSave=actual.income-actual.living-actual.housing-actual.insurance-actual.invest;
+  el.innerHTML=`
+  <div class="card">
+    ${ymNavHtml("yPrev","yNext",yy+"年"+(+mm)+"月")}
+    <p class="hint" style="margin-top:10px">ライフプランが想定する毎月の金額（プラン）と、家計簿の実績を並べています。単位：万円。差が大きい項目には「前提を見直す」から該当画面へ移動できます。</p>
+    <div class="brow total" style="grid-template-columns:1fr 78px 78px 90px"><span class="bname">経常項目</span><span class="mini" style="text-align:right">プラン</span><span class="mini" style="text-align:right">実績</span><span class="mini" style="text-align:right">差</span></div>
+    ${cmpRow("収入（手取り）",plan.recur.income,actual.income,true,"income")}
+    ${cmpRow("生活費",plan.recur.living,actual.living,false,"expense")}
+    ${cmpRow("住宅（ローン・家賃）",plan.recur.housing,actual.housing,false,"expense")}
+    ${cmpRow("保険料",plan.recur.insurance,actual.insurance,false,"expense")}
+    ${cmpRow("投資・貯蓄",plan.recur.invest,actual.invest,true,"assets")}
+    <div class="brow total" style="grid-template-columns:1fr 78px 78px 90px">
+      <span class="bname">貯蓄（手取り−生活費−住宅−保険）</span>
+      <span style="text-align:right">${planSave.toFixed(1)}</span>
+      <span style="text-align:right">${actSave.toFixed(1)}</span>
+      <span style="text-align:right;color:${actSave<planSave-0.5?"var(--neg)":"var(--pos)"}">${actSave-planSave>=0?"+":""}${(actSave-planSave).toFixed(1)}</span>
+    </div>
+    <p class="mini" style="margin-top:8px">※ 実績の「生活費」は生活費フラグ付きカテゴリ、「住宅」「保険」「投資・貯蓄」は同名カテゴリの合計です。NISA等への入金は家計簿で「投資・貯蓄」カテゴリに記録すると、支出ではなく貯蓄として集計されます。</p>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <span class="mini" style="align-self:center">前提を見直す:</span>
+      <button class="btn ghost sm" data-jump="income">収入</button>
+      <button class="btn ghost sm" data-jump="expense">生活費・住宅・保険</button>
+      <button class="btn ghost sm" data-jump="assets">投資</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>今年の特別支出（イベント）</h2>
+    <p class="hint">車の買い替え・教育費・住宅メンテ・旅行などは月ごとにばらつくため、${year}年の年間プランと、1〜${+mm}月までの実績（累計）で比べます。単位：万円。</p>
+    ${eventCompareRows(plan.events,year,+mm)}
+  </div>`;
+  bindYmNav();
+  el.querySelectorAll("[data-jump]").forEach(b=>b.onclick=()=>{ MODE="lifeplan"; pCur="plan"; planSub=b.dataset.jump; render(); window.scrollTo(0,0); });
+}
+function eventCompareRows(events,year,uptoMonth){
+  const ytd=cat=>E.filter(x=>!x.deleted&&x.kind==="expense"&&x.category===cat&&x.date>=year+"-01"&&x.date<=year+"-"+String(uptoMonth).padStart(2,"0")+"-31").reduce((s,x)=>s+x.amount,0)/10000;
+  const map=[["住宅メンテ・税等",events.housing,"住宅"],["車両",events.car,"車両"],["教育",events.education,"教育"],["その他・特別",events.other,"特別支出"]];
+  return `<div class="brow total" style="grid-template-columns:1fr 90px 100px"><span class="bname">項目</span><span class="mini" style="text-align:right">年間プラン</span><span class="mini" style="text-align:right">実績(1-${uptoMonth}月)</span></div>`+
+    map.map(([label,planV,cat])=>`<div class="brow" style="grid-template-columns:1fr 90px 100px"><span class="bname">${label}</span><span style="text-align:right">${planV.toFixed(0)}</span><span style="text-align:right">${ytd(cat).toFixed(0)}</span></div>`).join("");
+}
+function ymNavHtml(prevId,nextId,label){
+  return `<div class="monthnav" style="margin-bottom:0"><button class="btn ghost sm" id="${prevId}">◀</button><b>${label}</b><button class="btn ghost sm" id="${nextId}">▶</button></div>`;
+}
+function bindYmNav(){
+  const p=document.getElementById("yPrev"), n=document.getElementById("yNext");
+  if(p) p.onclick=()=>{ yMonth=ymFromIndex(ymIndex(yMonth)-1); render(); };
+  if(n) n.onclick=()=>{ yMonth=ymFromIndex(ymIndex(yMonth)+1); render(); };
+}
+
+/* ========== シナリオ比較 ========== */
+function renderScenario(){
+  const el=document.getElementById("tab-scenario");
+  if(!Array.isArray(S.scenarios)) S.scenarios=[];
+  const cur=computeCF();
+  const curEnd=cur.rows[cur.rows.length-1];
+  const curNeg=cur.rows.find(r=>r.netWorth<0);
+  const rowsFor=snap=>{ const bak=S; try{ S=snap.data; return computeCF(); } finally{ S=bak; } };
+  el.innerHTML=`
+  <div class="card">
+    <h2>シナリオ比較</h2>
+    <p class="hint">今の前提を「スナップショット」として保存し、いろいろ変えた後の結果と見比べられます。「繰上返済したら」「配偶者がフルタイムに戻ったら」などを保存して並べてみてください。</p>
+    <button class="btn" id="snapSave">現在のプランを保存</button>
+  </div>
+  <div class="card">
+    <h2>比較</h2>
+    <div class="tblwrap"><table class="data"><thead><tr><th>プラン</th><th>ピーク資産</th><th>資産が尽きる</th><th>最終資産</th><th></th></tr></thead><tbody>
+      <tr><td>現在の設定</td><td>${MAN(cur.rows.reduce((a,r)=>Math.max(a,r.netWorth),-1e9))}万</td><td>${curNeg?curNeg.primAge+"歳":"なし"}</td><td class="${curEnd.netWorth<0?"neg":""}">${MAN(curEnd.netWorth)}万</td><td></td></tr>
+      ${S.scenarios.map(sn=>{ const o=rowsFor(sn); const end=o.rows[o.rows.length-1]; const neg=o.rows.find(r=>r.netWorth<0);
+        return `<tr><td>${(sn.name||"（無題）").replace(/</g,"&lt;")}<br><span class="mini">${sn.savedAt?sn.savedAt.slice(0,10):""}</span></td><td>${MAN(o.rows.reduce((a,r)=>Math.max(a,r.netWorth),-1e9))}万</td><td>${neg?neg.primAge+"歳":"なし"}</td><td class="${end.netWorth<0?"neg":""}">${MAN(end.netWorth)}万</td><td><button class="btn ghost sm" data-load="${sn.id}">現在に反映</button> <button class="btn danger sm" data-delsn="${sn.id}">×</button></td></tr>`;
+      }).join("")}
+    </tbody></table></div>
+    ${S.scenarios.length?`<div class="chartbox" style="margin-top:14px">${scenarioChart(cur.rows,S.scenarios.map(sn=>rowsFor(sn).rows))}</div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>現在</span>${S.scenarios.map((sn,i)=>`<span><i style="background:${catColor(i+1)}"></i>${(sn.name||"無題").replace(/</g,"&lt;")}</span>`).join("")}</div>`:`<p class="mini" style="margin-top:8px">保存したシナリオがありません。上の「現在のプランを保存」で追加してください。</p>`}
+  </div>`;
+  document.getElementById("snapSave").onclick=()=>{
+    const name=(prompt("このプランの名前（例：現状維持、繰上返済あり）")||"").trim(); if(!name) return;
+    S.scenarios.push({id:uid(),name,savedAt:new Date().toISOString(),data:JSON.parse(JSON.stringify(Object.assign({},S,{scenarios:undefined})))});
+    commit();
+  };
+  el.querySelectorAll("[data-load]").forEach(b=>b.onclick=()=>{
+    if(!confirm("このシナリオの内容を現在の設定に反映します。今の設定は上書きされます（必要なら先に保存してください）。よろしいですか？")) return;
+    const sn=S.scenarios.find(x=>x.id===b.dataset.load); if(!sn) return;
+    const keepScen=S.scenarios; S=JSON.parse(JSON.stringify(sn.data)); S.scenarios=keepScen; ensurePlanModel(); ensureKakeibo(); commit();
+  });
+  el.querySelectorAll("[data-delsn]").forEach(b=>b.onclick=()=>{ S.scenarios=S.scenarios.filter(x=>x.id!==b.dataset.delsn); commit(); });
+}
+function scenarioChart(baseRows, others){
+  const all=[baseRows,...others];
+  const pad={l:52,r:14,t:14,b:30}, w=680, h=260, iw=w-pad.l-pad.r, ih=h-pad.t-pad.b;
+  const ages=baseRows.map(r=>r.primAge);
+  const a0=ages[0], a1=ages[ages.length-1];
+  let minY=0,maxY=1; all.forEach(rs=>rs.forEach(r=>{ minY=Math.min(minY,r.netWorth); maxY=Math.max(maxY,r.netWorth); }));
+  const X=a=>pad.l+(a-a0)/(a1-a0||1)*iw, Y=v=>pad.t+(1-(v-minY)/(maxY-minY||1))*ih;
+  const line=(rs,col)=>`<path d="${rs.map((r,i)=>`${i?"L":"M"}${X(r.primAge).toFixed(1)},${Y(r.netWorth).toFixed(1)}`).join("")}" fill="none" stroke="${col}" stroke-width="2"/>`;
+  let grid="";
+  for(let i=0;i<=4;i++){ const v=minY+(maxY-minY)*i/4, y=Y(v); grid+=`<line x1="${pad.l}" y1="${y}" x2="${w-pad.r}" y2="${y}" stroke="var(--line)"/><text x="${pad.l-6}" y="${y+4}" text-anchor="end" font-size="11" fill="var(--sub)">${MAN(v)}</text>`; }
+  for(let a=Math.ceil(a0/10)*10;a<=a1;a+=10){ grid+=`<text x="${X(a)}" y="${h-pad.b+16}" text-anchor="middle" font-size="11" fill="var(--sub)">${a}歳</text>`; }
+  const zeroY=Y(0);
+  return `<svg width="${w}" height="${h}" role="img" style="max-width:none">${grid}<line x1="${pad.l}" y1="${zeroY}" x2="${w-pad.r}" y2="${zeroY}" stroke="var(--sub)"/>${others.map((rs,i)=>line(rs,catColor(i+1))).join("")}${line(baseRows,"var(--accent)")}</svg>`;
+}
+
+/* ========== ライフイベント年表 ========== */
+function renderTimeline(){
+  const el=document.getElementById("anaBody");
+  const {rows,prim,assetInfo}=computeCF();
+  const evByYear={};
+  const add=(year,txt)=>{ if(!year) return; (evByYear[year]=evByYear[year]||[]).push(txt); };
+  // 教育イベント
+  S.members.filter(m=>m.role==="child").forEach(c=>{
+    const stages=[[6,"小学校入学"],[12,"中学校入学"],[15,"高校入学"],[18,"大学等"]];
+    stages.forEach(([age,label])=>add(c.birthYear+age,`${c.name} ${label}`));
+    const ed=S.educations.find(e=>e.childId===c.id);
+    if(ed) add(c.birthYear+ (+ed.independentAge||22),`${c.name} 独立`);
+  });
+  // 就業終了・年金
+  S.incomes.forEach(inc=>{ const m=member(inc.memberId); if(!m) return;
+    if(inc.type==="salary"&&inc.endAge) add(m.birthYear+inc.endAge,`${m.name} 就業終了(${inc.endAge}歳)`);
+    if(inc.type==="pension") add(m.birthYear+(+inc.claimAge||65),`${m.name} 年金受給開始`);
+  });
+  // ローン完済・繰上返済
+  const sched=computeCF().sched;
+  if(S.housing.loan&&S.housing.loan.on) add(sched.payoffYear,"住宅ローン完済");
+  (S.housing.loan&&S.housing.loan.prepays||[]).forEach(p=>{ if(+p.amount>0) add(+p.year,`繰上返済 ${MAN(p.amount)}万`); });
+  // 大きな支出イベント（車・その他の周期支出、住宅メンテ）
+  S.expenses.forEach(e=>{ if(e.amount<50) return; const t=member(e.targetId)||prim;
+    for(let a=e.fromAge;a<=e.toAge;a+=Math.max(1,e.cycle)){ add(t.birthYear+a,`${e.name} ${MAN(e.amount)}万`); }
+  });
+  S.housing.maintenance.forEach(mt=>{ if(mt.annual<50) return;
+    for(let a=mt.fromAge;a<=mt.toAge;a+=Math.max(1,mt.cycle)){ add(prim.birthYear+a,`${mt.name} ${MAN(mt.annual)}万`); }
+  });
+  // 投資枯渇
+  (assetInfo||[]).forEach(x=>{ if(x.depleteYear) add(x.depleteYear,`投資「${x.name}」枯渇`); });
+  const years=Object.keys(evByYear).map(Number).filter(y=>y>=S.baseYear).sort((a,b)=>a-b);
+  el.innerHTML=`
+  <div class="card">
+    <h2>ライフイベント年表</h2>
+    <p class="hint">これから起きる主な出来事と、その年齢を一覧にしました。支出が重なる年が「注意すべき年」です。</p>
+    ${years.length?`<div style="position:relative">${years.map(y=>{
+      const r=rows.find(x=>x.year===y);
+      const spend=r?r.expenseTotal:0;
+      const heavy=r&&r.balance<0;
+      return `<div class="tl-row${heavy?" heavy":""}">
+        <div class="tl-year">${y}<br><span class="mini">${r?r.primAge+"歳":""}</span></div>
+        <div class="tl-body">${evByYear[y].map(t=>`<span class="tl-ev">${t.replace(/</g,"&lt;")}</span>`).join("")}
+          ${r?`<div class="mini" style="margin-top:3px">年間支出 ${MAN(spend)}万・収支 ${r.balance>=0?"+":""}${MAN(r.balance)}万${heavy?' <b style="color:var(--neg)">⚠赤字</b>':""}</div>`:""}
+        </div></div>`;
+    }).join("")}</div>`:`<p class="mini">表示できるイベントがありません。</p>`}
+  </div>`;
+}
+
 /* ========== 家計簿（実績）データ ========== */
 const EKEY="kakeibo_entries_v1", CKEY="kakeibo_config_v1";
 // living=true のカテゴリがライフプランの「生活費」と対応する
-const DEF_EXP=[["食費",1],["水道・光熱費",1],["家具・日用雑貨",1],["被服費",1],["医療費",1],["通信・交通費",1],["教養・娯楽費",1],["こづかい",1],["交際費",1],["その他雑費",1],["住宅",0],["車両",0],["教育",0],["保険",0],["特別支出",0]];
+const DEF_EXP=[["食費",1],["水道・光熱費",1],["家具・日用雑貨",1],["被服費",1],["医療費",1],["通信・交通費",1],["教養・娯楽費",1],["こづかい",1],["交際費",1],["その他雑費",1],["住宅",0],["車両",0],["教育",0],["保険",0],["投資・貯蓄",0],["特別支出",0]];
+const INVEST_CAT="投資・貯蓄";
 const DEF_INC=["給与","賞与","児童手当","その他"];
 function ensureKakeibo(){
   if(!S.kakeibo||typeof S.kakeibo!=="object") S.kakeibo={};
@@ -839,6 +1277,12 @@ function ensureKakeibo(){
   if(!k.budget||typeof k.budget!=="object") k.budget={monthly:0,scope:"living"};
   if(!k.budget.scope) k.budget.scope="living";
   if(!k.budget.perCat||typeof k.budget.perCat!=="object") k.budget.perCat={};
+  // 「投資・貯蓄」カテゴリを既存ユーザーにも補完（特別支出の直前に）
+  if(!k.cats.expense.some(c=>c.name===INVEST_CAT)){
+    const i=k.cats.expense.findIndex(c=>c.name==="特別支出");
+    const item={name:INVEST_CAT,living:false};
+    if(i>=0) k.cats.expense.splice(i,0,item); else k.cats.expense.push(item);
+  }
 }
 function expCats(){ return S.kakeibo.cats.expense.map(c=>c.name); }
 function incCats(){ return S.kakeibo.cats.income.map(c=>c.name); }
@@ -955,9 +1399,12 @@ function renderKInput(){
       <button id="kExp" class="${kKind==="expense"?"on":""}">支出</button>
       <button id="kInc" class="${kKind==="income"?"on":""}">収入</button>
     </div>
-    <div class="chips" id="kCats" style="margin-bottom:10px">
-      ${useCats.map(c=>`<button class="chip ${c===kCat?"on":""}" data-c="${c.replace(/"/g,"&quot;")}">${c}</button>`).join("")}
-      <button class="chip" id="kCatAdd" title="カテゴリを追加">＋</button>
+    <div style="max-width:480px;margin-bottom:10px">
+      <label class="f">カテゴリ</label>
+      <select id="kCatSel">
+        ${useCats.map(c=>`<option value="${c.replace(/"/g,"&quot;")}"${c===kCat?" selected":""}>${c}</option>`).join("")}
+        <option value="__add__">＋ 新しいカテゴリを追加…</option>
+      </select>
     </div>
     <div class="grid" style="grid-template-columns:1fr 1fr;max-width:480px">
       <div><label class="f">金額（円）</label><input type="number" inputmode="numeric" id="kAmt" placeholder="0"></div>
@@ -975,16 +1422,18 @@ function renderKInput(){
   </div>`;
   document.getElementById("kExp").onclick=()=>{kKind="expense";render();};
   document.getElementById("kInc").onclick=()=>{kKind="income";render();};
-  el.querySelectorAll("#kCats .chip[data-c]").forEach(b=>b.onclick=()=>{kCat=b.dataset.c;render();});
-  document.getElementById("kCatAdd").onclick=()=>{
-    const n=(prompt(kKind==="expense"?"追加する支出カテゴリ名":"追加する収入カテゴリ名")||"").trim();
-    if(!n) return;
-    if(catsFor(kKind).includes(n)){ alert("同じ名前のカテゴリが既にあります"); return; }
-    if(kKind==="expense"){
-      const living=confirm(`「${n}」を生活費として扱いますか？\n\nOK＝生活費に含める（食費・日用品など毎月の暮らしの費用）\nキャンセル＝含めない（住宅・車・教育など）`);
-      S.kakeibo.cats.expense.push({name:n,living});
-    } else S.kakeibo.cats.income.push({name:n});
-    kCat=n; commit();
+  document.getElementById("kCatSel").onchange=e=>{
+    if(e.target.value==="__add__"){
+      const n=(prompt(kKind==="expense"?"追加する支出カテゴリ名":"追加する収入カテゴリ名")||"").trim();
+      if(!n){ render(); return; } // 選択を元に戻す
+      if(catsFor(kKind).includes(n)){ alert("同じ名前のカテゴリが既にあります"); kCat=n; render(); return; }
+      if(kKind==="expense"){
+        const living=confirm(`「${n}」を生活費として扱いますか？\n\nOK＝生活費に含める（食費・日用品など毎月の暮らしの費用）\nキャンセル＝含めない（住宅・車・教育など）`);
+        S.kakeibo.cats.expense.push({name:n,living});
+      } else S.kakeibo.cats.income.push({name:n});
+      kCat=n; commit(); return;
+    }
+    kCat=e.target.value;
   };
   document.getElementById("kAdd").onclick=()=>{
     const amt=+document.getElementById("kAmt").value;
@@ -1001,7 +1450,7 @@ function renderKInput(){
 
 /* --- 画面2: カレンダー --- */
 function renderKCal(){
-  const el=document.getElementById("tab-kcal");
+  const el=document.getElementById("khomeBody");
   const monthList=E.filter(x=>!x.deleted && x.date && x.date.startsWith(kMonth));
   const list=(kSelDay?monthList.filter(x=>x.date===kSelDay):monthList)
     .slice().sort((a,b)=>b.date.localeCompare(a.date)||(b.updated_at||"").localeCompare(a.updated_at||""));
@@ -1031,17 +1480,19 @@ function renderKCal(){
 
 /* --- 画面3: 予算 --- */
 function renderKBudget(){
-  const el=document.getElementById("tab-kbudget");
+  const el=document.getElementById("khomeBody");
   const b=S.kakeibo.budget;
   const monthList=E.filter(x=>!x.deleted && x.date && x.date.startsWith(kMonth));
-  const rows=S.kakeibo.cats.expense.map(c=>({
-    name:c.name,
-    target:+(b.perCat[c.name]||0),
-    actual:monthList.filter(x=>x.kind==="expense"&&x.category===c.name).reduce((s,x)=>s+x.amount,0)
-  }));
-  const withT=rows.filter(r=>r.target>0);
-  const totT=withT.reduce((s,r)=>s+r.target,0);
-  const totA=withT.reduce((s,r)=>s+r.actual,0);
+  // 目標額が設定されたカテゴリだけを表示する
+  const rows=S.kakeibo.cats.expense
+    .filter(c=>+(b.perCat[c.name]||0)>0)
+    .map(c=>({
+      name:c.name,
+      target:+b.perCat[c.name],
+      actual:monthList.filter(x=>x.kind==="expense"&&x.category===c.name).reduce((s,x)=>s+x.amount,0)
+    }));
+  const totT=rows.reduce((s,r)=>s+r.target,0);
+  const totA=rows.reduce((s,r)=>s+r.actual,0);
   const barRow=(actual,target)=>{
     const pct=Math.round(actual/target*100);
     const color=actual>target?"var(--neg)":(pct>=80?"#BA7517":"var(--pos)");
@@ -1053,35 +1504,200 @@ function renderKBudget(){
   ${budgetCard(monthList)}
   <div class="card">
     <h2>カテゴリ別の目標</h2>
-    <p class="hint">カテゴリごとに月の目標額（円）を入力すると達成％が出ます。空欄のカテゴリは実績のみ表示します。</p>
-    ${rows.map(r=>`
-      <div class="brow">
+    ${rows.length?rows.map(r=>`
+      <div class="brow" style="grid-template-columns:96px 1fr">
         <span class="bname">${r.name}</span>
-        <input type="number" inputmode="numeric" data-bt="${r.name.replace(/"/g,"&quot;")}" value="${r.target||""}" placeholder="目標なし">
-        <div>${r.target>0?barRow(r.actual,r.target):`<span class="mini">${YEN(r.actual)}円</span>`}</div>
-      </div>`).join("")}
-    ${withT.length?`<div class="brow total"><span class="bname">合計</span><span class="mini" style="text-align:right">${YEN(totT)}円</span><div>${barRow(totA,totT)}</div></div>`:`<p class="mini" style="margin-top:8px">まだ目標が1つもありません。例えば食費に「50000」を入れてみてください。</p>`}
-  </div>
-  <div class="card">
-    <h2>全体目標の設定</h2>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));max-width:520px">
-      <div><label class="f">月全体の目標額（0で自動）</label><input type="number" id="bdgAmt" value="${+b.monthly||0}"></div>
-      <div><label class="f">全体目標の対象</label><select id="bdgScope">
-        <option value="living"${b.scope!=="all"?" selected":""}>生活費カテゴリのみ</option>
-        <option value="all"${b.scope==="all"?" selected":""}>すべての支出</option>
-      </select></div>
-    </div>
-    <p class="mini" style="margin-top:6px">0のままなら、ライフプランの生活費（月額）が「今月の支出目標」に自動で使われます。</p>
+        <div>${barRow(r.actual,r.target)}</div>
+      </div>`).join("")+`
+      <div class="brow total" style="grid-template-columns:96px 1fr">
+        <span class="bname">合計</span>
+        <div>${barRow(totA,totT)}</div>
+      </div>
+      <p class="mini" style="margin-top:8px">目標額の設定・変更は「管理」タブの<b>カテゴリ管理</b>から。</p>`
+    :`<p class="mini">目標が設定されたカテゴリはまだありません。「管理」タブの<b>カテゴリ管理</b>で、カテゴリごとに目標額（円/月）を入力すると、ここに達成％が表示されます。</p>`}
   </div>
   ${savingsCard(monthList)}`;
   bindMonthNav();
-  el.querySelectorAll("[data-bt]").forEach(inp=>inp.onchange=e=>{
-    const v=Math.max(0,+e.target.value||0);
-    if(v>0) S.kakeibo.budget.perCat[inp.dataset.bt]=v; else delete S.kakeibo.budget.perCat[inp.dataset.bt];
-    commit();
+}
+
+/* --- ホーム内: 収支（円グラフ） --- */
+const CAT_COLORS=["#4fb39a","#6ba0d8","#e0a13a","#c07f5c","#9b8bd0","#d47ba0","#7fb069","#5bc0be","#e07a5f","#b56576","#8a8a80","#6d6875"];
+function catColor(i){ return CAT_COLORS[i%CAT_COLORS.length]; }
+function donutChart(items,total,label){
+  const r=58, C=2*Math.PI*r;
+  let off=0, segs="";
+  if(total>0) items.forEach(it=>{
+    const frac=it.value/total;
+    segs+=`<circle cx="90" cy="90" r="${r}" fill="none" stroke="${it.color}" stroke-width="30" stroke-dasharray="${(frac*C).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-off*C).toFixed(2)}" transform="rotate(-90 90 90)"/>`;
+    off+=frac;
   });
-  document.getElementById("bdgAmt").onchange=e=>{ S.kakeibo.budget.monthly=Math.max(0,+e.target.value||0); commit(); };
-  document.getElementById("bdgScope").onchange=e=>{ S.kakeibo.budget.scope=e.target.value; commit(); };
+  return `<svg viewBox="0 0 180 180" width="180" height="180" role="img">
+    ${segs||`<circle cx="90" cy="90" r="${r}" fill="none" stroke="var(--chip)" stroke-width="30"/>`}
+    <text x="90" y="82" text-anchor="middle" font-size="12" fill="var(--sub)">${label}</text>
+    <text x="90" y="102" text-anchor="middle" font-size="15" font-weight="600" fill="var(--ink)">${YEN(total)}円</text>
+  </svg>`;
+}
+function renderKPie(){
+  const el=document.getElementById("khomeBody");
+  const monthList=E.filter(x=>!x.deleted&&x.date&&x.date.startsWith(kMonth));
+  const sumBy=kind=>{
+    const m={};
+    monthList.filter(x=>x.kind===kind).forEach(x=>{ m[x.category]=(m[x.category]||0)+x.amount; });
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  };
+  const expArr=sumBy("expense"), incArr=sumBy("income");
+  const exp=expArr.reduce((s,[,v])=>s+v,0), inc=incArr.reduce((s,[,v])=>s+v,0);
+  const bal=inc-exp;
+  const mk=(arr,total,label)=>{
+    const items=arr.map(([n,v],i)=>({name:n,value:v,color:catColor(i)}));
+    return `<div style="text-align:center">
+      ${donutChart(items,total,label)}
+      <div style="text-align:left;margin-top:8px">
+        ${items.length?items.map(it=>`<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line);font-size:13px">
+          <span style="width:11px;height:11px;border-radius:3px;background:${it.color};flex:none"></span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.name}</span>
+          <span>${YEN(it.value)}円</span>
+          <span class="mini" style="width:40px;text-align:right">${Math.round(it.value/total*100)}%</span>
+        </div>`).join(""):`<p class="mini" style="text-align:center">この月の記録はありません。</p>`}
+      </div></div>`;
+  };
+  el.innerHTML=`
+  <div class="card">
+    ${monthNavHtml()}
+    <div style="text-align:center;margin-top:14px">
+      <div class="mini">この月の収支</div>
+      <div style="font-size:30px;font-weight:600;color:${bal<0?"var(--neg)":"var(--pos)"}">${bal>=0?"+":""}${YEN(bal)}円</div>
+      <div class="mini">収入 ${YEN(inc)}円 − 支出 ${YEN(exp)}円</div>
+    </div>
+  </div>
+  <div class="card">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:20px">
+      <div><h2 style="text-align:center">支出の内訳</h2>${mk(expArr,exp,"支出")}</div>
+      <div><h2 style="text-align:center">収入の内訳</h2>${mk(incArr,inc,"収入")}</div>
+    </div>
+  </div>`;
+  bindMonthNav();
+}
+
+/* --- ホーム内: 推移（棒グラフ） --- */
+function mondayOf(ds){ const d=new Date(ds+"T00:00:00"); const wd=(d.getDay()+6)%7; d.setDate(d.getDate()-wd); return d; }
+function fmtDate(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function trendBuckets(){
+  const act=E.filter(x=>!x.deleted&&x.date);
+  if(!act.length) return {buckets:[],note:""};
+  let ranges=[];
+  if(tMode==="week"){
+    const mon=mondayOf(todayStr());
+    for(let i=11;i>=0;i--){
+      const s=new Date(mon); s.setDate(s.getDate()-7*i);
+      const e2=new Date(s); e2.setDate(e2.getDate()+6);
+      ranges.push({label:(s.getMonth()+1)+"/"+s.getDate(),from:fmtDate(s),to:fmtDate(e2)});
+    }
+  } else if(tMode==="month"){
+    const base=ymIndex(todayStr().slice(0,7));
+    for(let i=11;i>=0;i--){
+      const ym=ymFromIndex(base-i);
+      const [y,m]=ym.split("-").map(Number);
+      ranges.push({label:String(y).slice(2)+"/"+m,from:ym+"-01",to:ym+"-"+String(daysInMonth(y,m)).padStart(2,"0")});
+    }
+  } else if(tMode==="year"){
+    const years=act.map(x=>+x.date.slice(0,4));
+    const y0=Math.min(...years), y1=Math.max(new Date().getFullYear(),Math.max(...years));
+    for(let y=y0;y<=y1;y++) ranges.push({label:String(y),from:y+"-01-01",to:y+"-12-31"});
+  } else {
+    if(!tFrom||!tTo||tFrom>tTo) return {buckets:[],note:"開始日と終了日を指定してください"};
+    const days=Math.round((new Date(tTo)-new Date(tFrom))/86400000)+1;
+    if(days<=31){
+      for(let i=0;i<days;i++){ const d=new Date(tFrom+"T00:00:00"); d.setDate(d.getDate()+i); const ds=fmtDate(d); ranges.push({label:(d.getMonth()+1)+"/"+d.getDate(),from:ds,to:ds}); }
+    } else if(days<=190){
+      let s=mondayOf(tFrom);
+      while(fmtDate(s)<=tTo){ const e2=new Date(s); e2.setDate(e2.getDate()+6); ranges.push({label:(s.getMonth()+1)+"/"+s.getDate(),from:fmtDate(s),to:fmtDate(e2)}); s=new Date(s); s.setDate(s.getDate()+7); }
+    } else {
+      let i=ymIndex(tFrom.slice(0,7)); const end=ymIndex(tTo.slice(0,7));
+      for(;i<=end;i++){ const ym=ymFromIndex(i); const [y,m]=ym.split("-").map(Number); ranges.push({label:String(y).slice(2)+"/"+m,from:ym+"-01",to:ym+"-"+String(daysInMonth(y,m)).padStart(2,"0")}); }
+    }
+  }
+  const val=(from,to)=>{
+    const inR=act.filter(x=>x.date>=from&&x.date<=to);
+    if(tMetric==="expense") return inR.filter(x=>x.kind==="expense").reduce((s,x)=>s+x.amount,0);
+    if(tMetric==="income") return inR.filter(x=>x.kind==="income").reduce((s,x)=>s+x.amount,0);
+    if(tMetric==="balance") return inR.reduce((s,x)=>s+(x.kind==="income"?x.amount:-x.amount),0);
+    if(tMetric.indexOf("cat:")===0){
+      const p=tMetric.split(":");
+      return inR.filter(x=>x.kind===(p[1]==="e"?"expense":"income")&&x.category===p[2]).reduce((s,x)=>s+x.amount,0);
+    }
+    return 0;
+  };
+  let buckets;
+  if(tMetric==="savings"){
+    buckets=ranges.map(r=>({label:r.label,value:act.filter(x=>x.date<=r.to).reduce((s,x)=>s+(x.kind==="income"?x.amount:-x.amount),0)}));
+  } else buckets=ranges.map(r=>({label:r.label,value:val(r.from,r.to)}));
+  return {buckets,note:""};
+}
+function trendBarChart(buckets){
+  if(!buckets.length) return "";
+  const n=buckets.length;
+  const bw=Math.max(26,Math.min(56,Math.floor(600/n)));
+  const gap=10, padL=64, padR=10, padT=18, padB=40;
+  const w=padL+n*(bw+gap)+padR, h=280, ih=h-padT-padB;
+  const maxV=Math.max(1,...buckets.map(b=>Math.abs(b.value)));
+  const hasNeg=buckets.some(b=>b.value<0);
+  const zeroY=hasNeg?padT+ih/2:padT+ih;
+  const scale=(hasNeg?ih/2:ih)/maxV;
+  const isExpMetric=tMetric==="expense"||tMetric.indexOf("cat:e")===0;
+  const isIncMetric=tMetric==="income"||tMetric.indexOf("cat:i")===0;
+  const colorFor=v=> isExpMetric?"#6ba0d8" : isIncMetric?"var(--pos)" : (v>=0?"var(--pos)":"var(--neg)");
+  const fmt=v=>{ const a=Math.abs(v); return a>=100000000?(v/100000000).toFixed(1)+"億" : a>=10000?Math.round(v/10000).toLocaleString("ja-JP")+"万" : v.toLocaleString("ja-JP"); };
+  let bars="", labels="";
+  buckets.forEach((b,i)=>{
+    const x=padL+i*(bw+gap);
+    const bh=Math.abs(b.value)*scale;
+    const y=b.value>=0?zeroY-bh:zeroY;
+    if(b.value!==0){
+      bars+=`<rect x="${x}" y="${y.toFixed(1)}" width="${bw}" height="${Math.max(1,bh).toFixed(1)}" rx="3" fill="${colorFor(b.value)}"/>`;
+      bars+=`<text x="${x+bw/2}" y="${(b.value>=0?y-5:y+bh+13).toFixed(1)}" text-anchor="middle" font-size="10" fill="var(--sub)">${fmt(b.value)}</text>`;
+    }
+    labels+=`<text x="${x+bw/2}" y="${h-padB+16}" text-anchor="middle" font-size="11" fill="var(--sub)">${b.label}</text>`;
+  });
+  let grid=`<line x1="${padL-6}" y1="${zeroY}" x2="${w-padR}" y2="${zeroY}" stroke="var(--sub)" stroke-width="1"/>`;
+  grid+=`<text x="${padL-10}" y="${zeroY+4}" text-anchor="end" font-size="10" fill="var(--sub)">0</text>`;
+  grid+=`<line x1="${padL-6}" y1="${padT}" x2="${w-padR}" y2="${padT}" stroke="var(--line)"/>`;
+  grid+=`<text x="${padL-10}" y="${padT+4}" text-anchor="end" font-size="10" fill="var(--sub)">${fmt(maxV)}</text>`;
+  if(hasNeg){ grid+=`<line x1="${padL-6}" y1="${padT+ih}" x2="${w-padR}" y2="${padT+ih}" stroke="var(--line)"/><text x="${padL-10}" y="${padT+ih+4}" text-anchor="end" font-size="10" fill="var(--sub)">-${fmt(maxV)}</text>`; }
+  return `<div class="chartbox"><svg width="${w}" height="${h}" style="max-width:none" role="img">${grid}${bars}${labels}</svg></div>`;
+}
+function renderKTrend(){
+  const el=document.getElementById("khomeBody");
+  const metricOpts=[["savings","貯金残高（記録の累計）"],["balance","収支"],["expense","支出"],["income","収入"]];
+  const expOpts=S.kakeibo.cats.expense.map(c=>["cat:e:"+c.name,"支出："+c.name]);
+  const incOpts=S.kakeibo.cats.income.map(c=>["cat:i:"+c.name,"収入："+c.name]);
+  const MODES=[["week","週別"],["month","月別"],["year","年別"],["custom","期間指定"]];
+  const {buckets,note}=trendBuckets();
+  el.innerHTML=`
+  <div class="card">
+    <h2>推移</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));max-width:600px;margin-bottom:10px">
+      <div><label class="f">表示する項目</label><select id="tMetricSel">
+        ${metricOpts.map(([v,l])=>`<option value="${v}"${tMetric===v?" selected":""}>${l}</option>`).join("")}
+        <optgroup label="支出カテゴリ別">${expOpts.map(([v,l])=>`<option value="${v}"${tMetric===v?" selected":""}>${l}</option>`).join("")}</optgroup>
+        <optgroup label="収入カテゴリ別">${incOpts.map(([v,l])=>`<option value="${v}"${tMetric===v?" selected":""}>${l}</option>`).join("")}</optgroup>
+      </select></div>
+      <div><label class="f">期間</label><div class="seg2">${MODES.map(([v,l])=>`<button data-tm="${v}" class="${tMode===v?"on":""}">${l}</button>`).join("")}</div></div>
+    </div>
+    ${tMode==="custom"?`<div class="seg" style="margin-bottom:10px"><input type="date" id="tFromIn" value="${tFrom}" style="width:150px"><span class="mini">〜</span><input type="date" id="tToIn" value="${tTo}" style="width:150px"></div>`:""}
+    ${note?`<p class="mini">${note}</p>`:""}
+    ${buckets.length?trendBarChart(buckets):`<p class="mini">表示できる記録がまだありません。家計簿の記録が貯まると、ここに推移が表示されます。</p>`}
+    ${tMetric==="savings"?`<p class="mini" style="margin-top:8px">※ 貯金残高は家計簿の記録開始からの累計収支です（記録開始前からあった残高は含みません）。</p>`:""}
+  </div>`;
+  document.getElementById("tMetricSel").onchange=e=>{ tMetric=e.target.value; render(); };
+  el.querySelectorAll("[data-tm]").forEach(b=>b.onclick=()=>{
+    tMode=b.dataset.tm;
+    if(tMode==="custom"&&!tFrom){ const d=new Date(); tTo=todayStr(); d.setMonth(d.getMonth()-1); tFrom=fmtDate(d); }
+    render();
+  });
+  const tf=document.getElementById("tFromIn"), tt=document.getElementById("tToIn");
+  if(tf) tf.onchange=e=>{ tFrom=e.target.value; render(); };
+  if(tt) tt.onchange=e=>{ tTo=e.target.value; render(); };
 }
 
 /* --- 画面4: 管理（CSV・固定費・カテゴリ） --- */
@@ -1102,7 +1718,7 @@ function renderKManage(){
   </div>
   <div class="card">
     <h2>カテゴリ管理</h2>
-    <p class="hint">「生活費」にチェックを入れた支出カテゴリが、ライフプランの生活費との比較や全体目標（生活費のみ）の集計対象になります。</p>
+    <p class="hint">支出カテゴリに<b>目標</b>（円/月）を入力すると、そのカテゴリだけが「予算」タブに表示され、合計が今月の支出目標になります。「生活費」チェックは、ライフプランの生活費との比較対象の目印です。</p>
     <div style="font-size:13px;color:var(--sub);margin-bottom:6px"><b>支出カテゴリ</b></div>
     <div id="catExp"></div>
     <button class="btn ghost sm addbtn" id="catAddExp">+ 支出カテゴリ</button>
@@ -1156,12 +1772,17 @@ function renderKManage(){
     const box=document.getElementById(boxId); box.innerHTML="";
     arr.forEach(c=>{
       const r=document.createElement("div"); r.className="seg";
-      r.innerHTML=`<input type="text" value="${(c.name||"").replace(/"/g,"&quot;")}" data-k="name" style="width:150px">
-        ${isExp?`<label style="display:flex;gap:5px;align-items:center;font-size:13px;color:var(--sub)"><input type="checkbox" data-k="living" ${c.living?"checked":""} style="width:auto"> 生活費</label>`:""}
+      r.innerHTML=`<input type="text" value="${(c.name||"").replace(/"/g,"&quot;")}" data-k="name" style="width:140px">
+        ${isExp?`<span class="mini">目標</span><input type="number" inputmode="numeric" data-k="target" value="${+(S.kakeibo.budget.perCat[c.name]||0)||""}" placeholder="なし" style="width:100px"><span class="mini">円/月</span>
+        <label style="display:flex;gap:5px;align-items:center;font-size:13px;color:var(--sub)"><input type="checkbox" data-k="living" ${c.living?"checked":""} style="width:auto"> 生活費</label>`:""}
         <span class="mini">${E.filter(x=>!x.deleted&&x.category===c.name).length}件</span>
         <button class="btn danger sm">×</button>`;
       r.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
         if(inp.dataset.k==="living") c.living=e.target.checked;
+        else if(inp.dataset.k==="target"){
+          const v=Math.max(0,+e.target.value||0);
+          if(v>0) S.kakeibo.budget.perCat[c.name]=v; else delete S.kakeibo.budget.perCat[c.name];
+        }
         else{
           const old=c.name, nn=e.target.value.trim();
           if(!nn){ e.target.value=old; return; }
@@ -1177,6 +1798,7 @@ function renderKManage(){
         const used=E.filter(x=>!x.deleted&&x.category===c.name).length;
         if(used && !confirm(`「${c.name}」には ${used}件の明細があります。\nカテゴリを削除しても明細は残りますが、分類名はそのまま表示されます。削除しますか？`)) return;
         if(arr.length<=1){ alert("カテゴリを0件にはできません"); return; }
+        delete S.kakeibo.budget.perCat[c.name];
         const i=arr.indexOf(c); arr.splice(i,1); commit();
       };
       box.appendChild(r);
@@ -1207,15 +1829,25 @@ function budgetCard(list){
   const b=S.kakeibo.budget;
   const year=+kMonth.slice(0,4);
   const planLiv=planLivingMonthly(year);
-  const target=(+b.monthly>0)?+b.monthly:planLiv;
-  if(!(target>0)) return "";
-  const LS=livingSet();
-  const scopeLiving=b.scope!=="all";
-  const actual=list.filter(x=>x.kind==="expense"&&(!scopeLiving||LS.has(x.category))).reduce((s,x)=>s+x.amount,0);
+  const per=S.kakeibo.cats.expense.map(c=>c.name).filter(n=>+(b.perCat[n]||0)>0);
+  let target, actual, srcNote;
+  if(per.length){
+    // カテゴリ別目標の合計を全体目標にする
+    target=per.reduce((s,n)=>s+ +b.perCat[n],0);
+    const names=new Set(per);
+    actual=list.filter(x=>x.kind==="expense"&&names.has(x.category)).reduce((s,x)=>s+x.amount,0);
+    srcNote=`目標: ${per.length}カテゴリの設定額合計`;
+  }else{
+    // 目標未設定時はライフプランの生活費を自動目標に
+    target=planLiv;
+    if(!(target>0)) return "";
+    const LS=livingSet();
+    actual=list.filter(x=>x.kind==="expense"&&LS.has(x.category)).reduce((s,x)=>s+x.amount,0);
+    srcNote="目標未設定のため、ライフプランの生活費（生活費カテゴリが対象）を自動で使用";
+  }
   const pct=Math.round(actual/target*100);
   const over=actual>target;
   const color=over?"var(--neg)":(pct>=80?"#BA7517":"var(--pos)");
-  const auto=!(+b.monthly>0);
   return `<div class="card"><h2>今月の支出目標</h2>
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
       <b style="font-size:28px;color:${color}">${pct}%</b>
@@ -1224,10 +1856,9 @@ function budgetCard(list){
     <div class="pbar"><div style="width:${Math.min(100,pct)}%;background:${color}"></div></div>
     <p class="mini" style="margin-top:6px">
       ${over?`目標を <b style="color:var(--neg)">${YEN(actual-target)}円</b> 超えています`:`残り <b>${YEN(target-actual)}円</b>`}
-      　|　対象: ${scopeLiving?"生活費カテゴリ":"すべての支出"}${auto?"　|　目標額はライフプランの生活費から自動設定":""}
+      　|　${srcNote}
     </p>
-    ${(scopeLiving&&over&&!auto)?"":""}
-    ${scopeLiving&&planLiv>0?`<p class="mini" style="margin-top:4px;color:var(--sub)">ライフプランの生活費は月 ${YEN(planLiv)}円。実績が毎月これを超えるようなら、支出タブの生活費を実態に合わせるとキャッシュフロー予測が現実に近づきます。</p>`:""}
+    ${planLiv>0?`<p class="mini" style="margin-top:4px;color:var(--sub)">参考: ライフプランの生活費は月 ${YEN(planLiv)}円。実績が毎月これを超えるようなら、「前提の入力＞支出」の生活費を実態に合わせるとキャッシュフロー予測が現実に近づきます。</p>`:""}
   </div>`;
 }
 // ライフプランが想定する「その年に貯めるべき額」に対する達成率
@@ -1636,6 +2267,7 @@ document.getElementById("modeP").onclick=()=>{ MODE="lifeplan"; settingsOpen=fal
 document.getElementById("gearBtn").onclick=()=>{ settingsOpen=!settingsOpen; render(); };
 
 ensureKakeibo();   // 既存ユーザーのデータに家計簿設定を補完
+ensurePlanModel(); // 資産・年金・ローンの新項目を補完（旧データ移行）
 applyFixed();      // 起動時に、当月ぶんまでの固定費を計上
 render();
 // PWA（https配信時のみ有効。file://では静かにスキップ）
