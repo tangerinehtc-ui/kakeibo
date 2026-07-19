@@ -115,7 +115,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 .tl-row.heavy .tl-year{color:var(--neg)}
 .tl-ev{display:inline-block;background:var(--chip);border-radius:6px;padding:2px 8px;font-size:12px;margin:2px 4px 2px 0}
 @media print{
-  header,nav,#gearBtn,.tools,#printBtn,#updBar,#storageWarn{display:none !important}
+  header,nav,#gearBtn,.tools,#printBtn,#updBar,#storageWarn,#chatFab,#chatPanel{display:none !important}
   main{padding:0;max-width:none}
   .card{border:1px solid #ccc;break-inside:avoid;box-shadow:none}
   .chip:not(.on){display:none}
@@ -155,6 +155,28 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 .wzsum{font-size:13px;max-height:34vh;overflow-y:auto}
 .wzsum div{display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px dashed var(--line)}
 .wzsum div b{text-align:right}
+/* 教育費の各段階の行 */
+.edu-row{display:grid;grid-template-columns:70px minmax(120px,1.4fr) minmax(110px,1fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+.edu-row:last-child{border-bottom:none}
+.edu-lab{font-size:13px;color:var(--sub)}
+.edu-amt,.edu-yr{display:flex;align-items:center;gap:5px}
+.edu-amt input,.edu-yr input{width:70px}
+.edu-amt input:disabled{opacity:.4}
+@media(max-width:600px){ .edu-row{grid-template-columns:1fr 1fr;gap:6px} .edu-lab{grid-column:1/-1} }
+/* 折りたたみカード */
+.cardhead{display:flex;align-items:center;gap:8px;cursor:pointer}
+.cardhead h2{flex:1;margin:0}
+.cardtoggle{font-size:12px;color:var(--sub);white-space:nowrap}
+/* 使い方ガイド（チャット） */
+.chatFab{position:fixed;right:18px;bottom:18px;z-index:90;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;border:none;font-size:22px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+@media(max-width:640px){ .chatFab{bottom:76px} }
+.chatPanel{position:fixed;right:18px;bottom:80px;z-index:91;width:340px;max-width:92vw;max-height:70vh;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.3);display:flex;flex-direction:column;overflow:hidden}
+@media(max-width:640px){ .chatPanel{bottom:138px} }
+.chathead{display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);font-weight:600}
+.chathead .x{margin-left:auto;background:transparent;border:none;font-size:20px;cursor:pointer;color:var(--sub)}
+.chatlog{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-height:180px}
+.chatin{border-top:1px solid var(--line);padding:10px;display:flex;gap:6px}
+.chatin input{flex:1}
 </style>
 </head>
 <body>
@@ -181,18 +203,25 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 
 <script>
 "use strict";
-const APP_VERSION = "2026.07.19-4";
+const APP_VERSION = "2026.07.20-3";
 const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
 const uid = () => Math.random().toString(36).slice(2,9);
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
 
 /* ---------- 教育費プリセット（万円/年・目安） ---------- */
+// 教育費プリセット（万円/年の目安）
 const EDU = {
   "保育園(認可)":30,"幼稚園(公立)":15,"幼稚園(私立)":31,
   "小学校(公立)":35,"小学校(私立)":167,
   "中学校(公立)":54,"中学校(私立)":144,
   "高校(公立)":51,"高校(私立)":105,
-  "大学(国公立)":61,"大学(私立文系)":118,"大学(私立理系)":156,"大学(私立医歯)":350
+  "大学(国公立)":61,"大学(私立文系)":118,"大学(私立理系)":156,"大学(私立医歯)":350,
+  "大学(私立薬学・6年)":200,"短大・専門(2年)":110,"大学院(修士)":90
+};
+// 大学系の標準修業年数（未設定時のデフォルト。手入力で上書き可）
+const EDU_UNI_YEARS = {
+  "大学(国公立)":4,"大学(私立文系)":4,"大学(私立理系)":4,
+  "大学(私立医歯)":6,"大学(私立薬学・6年)":6,"短大・専門(2年)":2,"大学院(修士)":6
 };
 const EDU_STAGES = [
   {label:"未就学(0-2)",from:0,to:2,opts:["保育園(認可)","なし"]},
@@ -200,7 +229,7 @@ const EDU_STAGES = [
   {label:"小学校",from:6,to:11,opts:["小学校(公立)","小学校(私立)"]},
   {label:"中学校",from:12,to:14,opts:["中学校(公立)","中学校(私立)"]},
   {label:"高校",from:15,to:17,opts:["高校(公立)","高校(私立)"]},
-  {label:"大学",from:18,to:21,opts:["大学(国公立)","大学(私立文系)","大学(私立理系)","大学(私立医歯)","なし"]}
+  {label:"大学",from:18,to:23,uni:true,opts:["大学(国公立)","大学(私立文系)","大学(私立理系)","大学(私立薬学・6年)","大学(私立医歯)","短大・専門(2年)","大学院(修士)","なし"]}
 ];
 
 /* ---------- 電化製品プリセット（名前・耐用年数・金額万円） ---------- */
@@ -296,6 +325,7 @@ function ageInYear(m, year){ return year - m.birthYear; }
 /* ---------- プランデータの補完・旧形式からの移行 ---------- */
 function ensurePlanModel(){
   if(S.inflation==null) S.inflation=0;
+  if(S.inputMode!=="simple"&&S.inputMode!=="detail") S.inputMode="detail"; // 既存データ・サンプルは詳細モード
   if(!Array.isArray(S.appliances)) S.appliances=[];
   if(!Array.isArray(S.assets)) S.assets=[];
   S.assets.forEach(a=>{
@@ -405,13 +435,29 @@ function loanSchedule(loan, opt){
 function loanAnnual(loan){ const s=loanSchedule(loan); return (s.initialMonthly||0)*12; }
 
 /* ---------- 教育費：子の年齢→年額 ---------- */
+// 大学の修業年数（手入力優先、なければ選択肢の標準年数、既定4年）
+function eduUniYears(edu){
+  if(edu&&edu.uniYears!=null&&edu.uniYears!=="") return Math.max(0,+edu.uniYears);
+  const ch=edu&&edu.choices&&edu.choices["大学"];
+  return EDU_UNI_YEARS[ch]!=null?EDU_UNI_YEARS[ch]:4;
+}
+// あるステージの年額（手入力の金額があれば優先、なければ選択肢の目安）
+function eduAmount(edu, label){
+  const ov=edu&&edu.amounts&&edu.amounts[label];
+  if(ov!=null&&ov!=="") return Math.max(0,+ov);
+  const choice=edu&&edu.choices&&edu.choices[label];
+  return (choice&&choice!=="なし") ? (EDU[choice]||0) : 0;
+}
 function eduAt(edu, childAge){
-  if(childAge>=edu.independentAge) return 0;
   for(const st of EDU_STAGES){
-    if(childAge>=st.from && childAge<=st.to){
-      const choice=edu.choices[st.label];
-      return (choice && choice!=="なし") ? (EDU[choice]||0) : 0;
-    }
+    if(st.uni) continue; // 大学は年数可変なので別扱い
+    if(childAge>=st.from && childAge<=st.to) return eduAmount(edu, st.label);
+  }
+  // 大学等（18歳開始・年数はuniYearsで可変）
+  const ch=edu&&edu.choices&&edu.choices["大学"];
+  if(ch&&ch!=="なし"){
+    const yrs=eduUniYears(edu);
+    if(yrs>0 && childAge>=18 && childAge<18+yrs) return eduAmount(edu, "大学");
   }
   return 0;
 }
@@ -434,6 +480,8 @@ function computeCF(opt){
     salaried:opt.disable.salaried!==false, useIns:opt.disable.useIns!==false,
     extraMonthly:+opt.disable.extraMonthly||0
   }:null;
+  // 通常は「加入中」の保険のみ。opt.includeCandidateで「検討中」も含める
+  const insList=(S.insurances||[]).filter(p=> p.status!=="candidate" || (opt&&opt.includeCandidate));
   let endYear;
   const survAdults=death?adults.filter(m=>m.id!==death.m.id):adults;
   if(survAdults.length) endYear=Math.max(...survAdults.map(m=>m.birthYear+m.lifespan));
@@ -504,7 +552,7 @@ function computeCF(opt){
       if(year===dis.year+1) disBen+=shogai*0.5; // 障害年金は認定(約1年6ヶ月後)から
       else if(year>dis.year+1) disBen+=shogai;
       if(dis.useIns){ // 民間の就業不能保険
-        (S.insurances||[]).forEach(p=>{
+        insList.forEach(p=>{
           if(p.type!=="disability"||p.memberId!==dis.m.id) return;
           if(a>(+p.toAge||65)) return;
           const wait=Math.max(0,+p.waitMonths||0);
@@ -516,7 +564,7 @@ function computeCF(opt){
     }
     // 構造化した保険：保険料と受取（個人年金・学資）
     let insPrem=0;
-    (S.insurances||[]).forEach(p=>{
+    insList.forEach(p=>{
       const t=member(p.memberId)||prim; const a=ages[t.id];
       if(a==null||a<0) return;
       const stopped=death && p.memberId===death.m.id && year>=death.year; // 故人の契約は保険料停止
@@ -620,7 +668,31 @@ let tMetric=UI.tMetric||"savings", tMode=UI.tMode||"month", tFrom=UI.tFrom||"", 
 let settingsOpen=false;
 let anaSub=UI.anaSub||"cf", yMonth=UI.yMonth||todayStr().slice(0,7);
 let emgMode=UI.emgMode||"death";
-function saveUI(){ try{ localStorage.setItem(UKEY,JSON.stringify({mode:MODE,kCur,pCur,planSub,kHomeSub,tMetric,tMode,tFrom,tTo,anaSub,yMonth,emgMode})); }catch(e){} }
+let anaScen=UI.anaScen||"normal";
+let COLLAPSE=UI.collapse&&typeof UI.collapse==="object"?UI.collapse:{};
+function isOpen(key,def){ return COLLAPSE[key]===undefined?def:COLLAPSE[key]; }
+function setOpen(key,val){ COLLAPSE[key]=val; saveUI(); }
+function saveUI(){ try{ localStorage.setItem(UKEY,JSON.stringify({mode:MODE,kCur,pCur,planSub,kHomeSub,tMetric,tMode,tFrom,tTo,anaSub,yMonth,emgMode,anaScen,collapse:COLLAPSE})); }catch(e){} }
+/* もしもの備え：本人・配偶者 */
+function emgAdults(){ return S.members.filter(m=>m.role==="self"||m.role==="spouse"); }
+function scenLabel(scen){ return {death:"万一（死亡）",disable:"働けなくなった場合"}[scen]||""; }
+/* 想定シナリオ→computeCFのオプションを組み立てる（includeCandidateで検討中の保険も反映） */
+function emgOptFor(scen, includeCandidate){
+  const em=S.emergency; const adults=emgAdults();
+  const cand=includeCandidate?{includeCandidate:true}:{};
+  if(scen==="death"&&em){
+    const t=member(em.target)||adults[0]; if(!t) return includeCandidate?cand:undefined;
+    const year=Math.max(S.baseYear,+em.year||(S.baseYear+1));
+    const ins=lifeInsFor(t.id,year,includeCandidate)+(+(em.ins[t.id]||0));
+    return Object.assign({death:{memberId:t.id,year,insurance:ins,danshin:em.danshin,livingPct:em.livingPct}},cand);
+  }
+  if(scen==="disable"&&em&&em.dis){
+    const t=member(em.dis.target)||adults[0]; if(!t) return includeCandidate?cand:undefined;
+    const year=Math.max(S.baseYear,+em.dis.year||(S.baseYear+1));
+    return Object.assign({disable:{memberId:t.id,year,salaried:em.dis.salaried,useIns:true}},cand);
+  }
+  return includeCandidate?cand:undefined;
+}
 const KTABS=[["khome","ホーム"],["kinput","入力"],["kmanage","管理"]];
 const PTABS=[["home","サマリー"],["plan","前提の入力"],["yojitsu","予実"],["analysis","分析"],["scenario","シナリオ"]];
 function curTab(){ return settingsOpen?"settings":(MODE==="kakeibo"?kCur:pCur); }
@@ -653,32 +725,179 @@ function buildNav(){
     n.appendChild(b);
   });
 }
+/* 折りたたみ可能なカード（本体HTMLの中身は変えず、開閉ヘッダーで包む） */
+function collapseCard(key,title,hint,bodyHtml,def){
+  const open=isOpen(key,def!==false);
+  return `<div class="card">
+    <div class="cardhead" data-ck="${key}"><h2>${title}</h2><span class="cardtoggle">${open?"閉じる ▲":"開く ▼"}</span></div>
+    ${hint?`<p class="hint">${hint}</p>`:""}
+    <div class="cardbody" data-cb="${key}" style="${open?"":"display:none"}">${bodyHtml}</div>
+  </div>`;
+}
+function bindCollapse(el){
+  el.querySelectorAll("[data-ck]").forEach(h=>h.onclick=()=>{
+    const key=h.dataset.ck;
+    const body=el.querySelector(`[data-cb="${key}"]`); if(!body) return;
+    const wasOpen=body.style.display!=="none";
+    setOpen(key,!wasOpen);
+    body.style.display=wasOpen?"none":"";
+    h.querySelector(".cardtoggle").textContent=wasOpen?"開く ▼":"閉じる ▲";
+  });
+}
 function renderPlan(){
   const el=document.getElementById("tab-plan");
-  const SUBS=[["family","家族・基本"],["income","収入"],["expense","支出"],["insurance","保険"],["assets","資産"]];
-  el.innerHTML=`<div style="display:flex;justify-content:flex-end;margin:2px 0 8px"><button class="btn ghost sm" id="planWizBtn">🪄 かんたん設定ガイド</button></div>
-    <div class="chips" style="margin:4px 0 14px">${SUBS.map(([id,l])=>`<button class="chip ${planSub===id?"on":""}" data-ps="${id}">${l}</button>`).join("")}</div><div id="planBody"></div>`;
-  document.getElementById("planWizBtn").onclick=wzOpen;
-  el.querySelectorAll("[data-ps]").forEach(b=>b.onclick=()=>{ planSub=b.dataset.ps; render(); });
-  if(planSub==="family") renderFamily();
-  if(planSub==="income") renderIncome();
-  if(planSub==="expense") renderExpense();
-  if(planSub==="insurance") renderInsurance();
-  if(planSub==="assets") renderAssets();
+  ensurePlanModel();
+  const simple=S.inputMode==="simple";
+  const toggle=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 14px">
+    <div class="seg2"><button id="imSimple" class="${simple?"on":""}">かんたん</button><button id="imDetail" class="${!simple?"on":""}">詳細</button></div>
+    <span class="mini">${simple?"5分で作れる主要項目だけを入力します":"すべての項目を細かく設定できます"}</span>
+  </div>`;
+  if(simple){
+    el.innerHTML=toggle+`<div id="planBody"></div>`;
+    renderSimpleForm();
+  } else {
+    const SUBS=[["family","家族・基本"],["income","収入"],["expense","支出"],["insurance","保険"],["assets","資産"]];
+    el.innerHTML=toggle+`<div class="chips" style="margin:4px 0 14px">${SUBS.map(([id,l])=>`<button class="chip ${planSub===id?"on":""}" data-ps="${id}">${l}</button>`).join("")}</div><div id="planBody"></div>`;
+    el.querySelectorAll("[data-ps]").forEach(b=>b.onclick=()=>{ planSub=b.dataset.ps; render(); });
+    if(planSub==="family") renderFamily();
+    if(planSub==="income") renderIncome();
+    if(planSub==="expense") renderExpense();
+    if(planSub==="insurance") renderInsurance();
+    if(planSub==="assets") renderAssets();
+  }
+  document.getElementById("imSimple").onclick=()=>switchInputMode("simple");
+  document.getElementById("imDetail").onclick=()=>switchInputMode("detail");
+}
+function switchInputMode(to){
+  if(to===S.inputMode) return;
+  if(to==="detail"){ S.inputMode="detail"; commit(); window.scrollTo(0,0); return; }
+  // 詳細 → かんたん
+  if(!confirm("かんたんモードに切り替えます。\n現在の前提から読み取れる範囲で、かんたん入力の値を作り直します（給与カーブの折れ線・繰上返済・複数の保険など、詳細だけの設定は反映されない場合があります）。よろしいですか？")) return;
+  const a=simpleFromState();
+  wzApply(a); // かんたんモードとしてプランを再生成
+  window.scrollTo(0,0);
+}
+/* 現在の（詳細）Sから、かんたん入力の値を逆算する */
+function simpleFromState(){
+  const a=(S.simple&&typeof S.simple==="object")?JSON.parse(JSON.stringify(S.simple)):{};
+  const by=S.baseYear;
+  const self=S.members.find(m=>m.role==="self")||S.members[0];
+  const spouse=S.members.find(m=>m.role==="spouse");
+  const kids=S.members.filter(m=>m.role==="child");
+  if(self) a.selfBirth=self.birthYear;
+  a.hasSpouse=spouse?"yes":"no";
+  a.kids=kids.length;
+  a.kidYears=kids.map(c=>c.birthYear);
+  const salOf=m=>m?Math.round(S.incomes.filter(i=>i.type==="salary"&&i.memberId===m.id).reduce((s,i)=>s+salaryAt(i,by-m.birthYear),0)):0;
+  a.selfIncome=salOf(self);
+  if(spouse) a.spouseIncome=salOf(spouse);
+  const penOf=m=>m?Math.round(S.incomes.filter(i=>i.type==="pension"&&i.memberId===m.id).reduce((s,i)=>s+(+i.annual||0),0)):0;
+  a.pensionKnown="yes"; a.selfPension=penOf(self); if(spouse) a.spousePension=penOf(spouse);
+  const loan=S.housing.loan;
+  if(loan&&loan.on){ a.housing="own_loan"; a.loanBal=Math.round(loan.principal); a.loanRate=loan.rate; a.loanYears=loan.termYears; }
+  else if(S.housing.rent&&S.housing.rent.length){ a.housing="rent"; a.rent=S.housing.rent[0].monthly; }
+  else a.housing="own_free";
+  const livSeg=S.living.find(s=>s.to<65)||S.living[0]; if(livSeg) a.living=livSeg.monthly;
+  const prem=(S.insurances||[]).reduce((s,p)=>s+(+p.premium||0),0)+S.expenses.filter(e=>e.category==="支払保険料").reduce((s,e)=>s+(+e.amount||0),0);
+  a.insurance=Math.round(prem);
+  a.deathAmount=Math.round((S.insurances||[]).filter(p=>p.type==="life").reduce((s,p)=>s+(+p.amount||0),0));
+  a.savings=Math.round(S.assets.filter(x=>x.type!=="invest").reduce((s,x)=>s+(+x.balance||0),0));
+  const iv=S.assets.find(x=>x.type==="invest"); a.invest=iv?Math.round(iv.balance):0; a.monthlyInvest=iv?iv.monthly:0;
+  if(!a.eduPlan) a.eduPlan="std";
+  return a;
+}
+/* かんたんモードの1画面フォーム。変更のたびにプラン全体を再生成する */
+function renderSimpleForm(){
+  const box=document.getElementById("planBody");
+  if(!S.simple||typeof S.simple!=="object") S.simple=simpleFromState();
+  const a=S.simple;
+  const apply=()=>{ wzApply(a); };
+  const numF=(key,label,unit,def)=>`<div><label class="f">${label}${unit?`（${unit}）`:""}</label><input type="number" data-sk="${key}" value="${a[key]!=null?a[key]:def}"></div>`;
+  const eduLabels={public:"できるだけ公立",uni_private:"大学は私立想定",private:"中学から私立も",std:"わからない（標準）"};
+  const housingLabels={rent:"賃貸",own_loan:"持ち家（ローンあり）",own_free:"持ち家（ローンなし）"};
+  const kidsN=+a.kids||0;
+  box.innerHTML=`
+  <div class="card"><h2>家族</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+      ${numF("selfBirth","あなたの生まれ年","西暦",1990)}
+      <div><label class="f">配偶者</label><select data-sk="hasSpouse"><option value="yes"${a.hasSpouse==="yes"?" selected":""}>いる</option><option value="no"${a.hasSpouse!=="yes"?" selected":""}>いない</option></select></div>
+      <div><label class="f">お子さんの人数</label><select data-sk="kids">${[0,1,2,3,4].map(n=>`<option value="${n}"${kidsN===n?" selected":""}>${n}人</option>`).join("")}</select></div>
+    </div>
+    ${kidsN>0?`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(96px,1fr));margin-top:8px">${Array.from({length:kidsN}).map((_,i)=>`<div><label class="f">第${i+1}子の生まれ年</label><input type="number" data-ky="${i}" value="${(a.kidYears&&a.kidYears[i]!=null)?a.kidYears[i]:(S.baseYear-3*i)}"></div>`).join("")}</div>`:""}
+  </div>
+  <div class="card"><h2>収入</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+      ${numF("selfIncome","あなたの税込み年収","万円/年",400)}
+      ${a.hasSpouse==="yes"?numF("spouseIncome","配偶者の税込み年収","万円/年",0):""}
+    </div>
+    <div style="margin-top:8px"><label class="f">年金の見込み</label>
+      <select data-sk="pensionKnown" style="max-width:260px"><option value="no"${a.pensionKnown!=="yes"?" selected":""}>年収から自動で概算する</option><option value="yes"${a.pensionKnown==="yes"?" selected":""}>自分で入力する</option></select></div>
+    ${a.pensionKnown==="yes"?`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:8px">${numF("selfPension","あなたの年金","万円/年",150)}${a.hasSpouse==="yes"?numF("spousePension","配偶者の年金","万円/年",80):""}</div>`:""}
+  </div>
+  <div class="card"><h2>住まい</h2>
+    <div><label class="f">住まいのタイプ</label><select data-sk="housing" style="max-width:260px">${Object.entries(housingLabels).map(([v,l])=>`<option value="${v}"${a.housing===v?" selected":""}>${l}</option>`).join("")}</select></div>
+    ${a.housing==="rent"?`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:8px">${numF("rent","毎月の家賃","万円/月",8)}</div>`:""}
+    ${a.housing==="own_loan"?`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin-top:8px">${numF("loanBal","ローン残高","万円",2000)}${numF("loanRate","金利","%",1.0)}${numF("loanYears","残り年数","年",25)}</div>`:""}
+  </div>
+  <div class="card"><h2>支出</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+      ${numF("living","毎月の生活費","万円/月・住居/教育/保険は除く",20)}
+      ${kidsN>0?`<div><label class="f">お子さんの進路方針</label><select data-sk="eduPlan">${Object.entries(eduLabels).map(([v,l])=>`<option value="${v}"${(a.eduPlan||"std")===v?" selected":""}>${l}</option>`).join("")}</select></div>`:""}
+    </div>
+  </div>
+  <div class="card"><h2>保険</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+      ${numF("insurance","年間の保険料","万円/年",20)}
+      ${numF("deathAmount","死亡保険金","万円",0)}
+    </div>
+  </div>
+  <div class="card"><h2>資産</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+      ${numF("savings","今の預貯金","万円",300)}
+      ${numF("invest","投資の残高","万円",0)}
+      ${numF("monthlyInvest","毎月の積立","万円/月",0)}
+    </div>
+    <p class="mini" style="margin-top:10px">給与カーブ・老後の生活費・家電の買い替え・持ち家の維持費などは自動で補完されます。細かく調整したいときは上の「詳細」に切り替えてください。</p>
+  </div>`;
+  box.querySelectorAll("[data-sk]").forEach(inp=>inp.onchange=e=>{
+    const k=inp.dataset.sk;
+    if(k==="hasSpouse"||k==="pensionKnown"||k==="housing"||k==="eduPlan") a[k]=e.target.value;
+    else if(k==="kids"){ const n=+e.target.value; a.kids=n; a.kidYears=a.kidYears||[]; a.kidYears.length=n; for(let i=0;i<n;i++){ if(a.kidYears[i]==null) a.kidYears[i]=S.baseYear-3*i; } }
+    else a[k]=+e.target.value;
+    apply();
+  });
+  box.querySelectorAll("[data-ky]").forEach(inp=>inp.onchange=e=>{
+    const i=+inp.dataset.ky; a.kidYears=a.kidYears||[]; a.kidYears[i]=+e.target.value; apply();
+  });
 }
 function renderAnalysis(){
   const el=document.getElementById("tab-analysis");
   const SUBS=[["cf","キャッシュフロー表"],["charts","グラフ"],["timeline","年表"],["emg","もしもの備え"]];
-  el.innerHTML=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 14px">
+  const showScen=anaSub==="cf"||anaSub==="charts"||anaSub==="timeline";
+  const SC=[["normal","通常プラン"],["death","万一（死亡）"],["disable","働けなくなった場合"]];
+  el.innerHTML=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 10px">
     <div class="chips" style="flex:1">${SUBS.map(([id,l])=>`<button class="chip ${anaSub===id?"on":""}" data-as="${id}">${l}</button>`).join("")}</div>
     <button class="btn ghost sm" id="printBtn">印刷 / PDF保存</button>
-  </div><div id="anaBody"></div>`;
+  </div>
+  ${showScen?`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 14px"><span class="mini">表示する想定:</span><div class="chips">${SC.map(([id,l])=>`<button class="chip ${anaScen===id?"on":""}" data-scen="${id}">${l}</button>`).join("")}</div></div>`:""}
+  <div id="anaBody"></div>`;
   el.querySelectorAll("[data-as]").forEach(b=>b.onclick=()=>{ anaSub=b.dataset.as; render(); });
+  el.querySelectorAll("[data-scen]").forEach(b=>b.onclick=()=>{ anaScen=b.dataset.scen; render(); });
   document.getElementById("printBtn").onclick=()=>window.print();
-  if(anaSub==="cf") renderCF();
-  if(anaSub==="charts") renderCharts();
-  if(anaSub==="timeline") renderTimeline();
+  const scen=showScen?anaScen:"normal";
+  const opt=scen!=="normal"?emgOptFor(scen):undefined;
+  if(anaSub==="cf") renderCF(opt,scen);
+  if(anaSub==="charts") renderCharts(opt,scen);
+  if(anaSub==="timeline") renderTimeline(opt,scen);
   if(anaSub==="emg") renderEmergency();
+}
+/* 想定シナリオ表示中のバナー */
+function scenBanner(scen){
+  if(!scen||scen==="normal") return "";
+  const em=S.emergency; const t=member(scen==="death"?em.target:(em.dis&&em.dis.target))||emgAdults()[0];
+  const year=Math.max(S.baseYear,+((scen==="death"?em.year:em.dis&&em.dis.year))||(S.baseYear+1));
+  return `<div style="background:rgba(192,73,47,.12);border:1px solid var(--warn);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:13px">
+    ⚠ <b>${scenLabel(scen)}</b>の想定で表示しています（${t?t.name:""}・${year}年〜）。設定は「もしもの備え」で変更できます。</div>`;
 }
 function renderKHome(){
   const el=document.getElementById("tab-khome");
@@ -725,7 +944,7 @@ function renderHome(){
     <h2>使い方</h2>
     <p class="hint">入力が大変なときは、質問に答えるだけで前提を作れる<b>かんたん設定ガイド</b>が便利です。</p>
     <button class="btn" id="homeWizBtn" style="margin-bottom:12px">🪄 かんたん設定ガイドで入力する</button>
-    <p class="hint">「前提の入力」タブで家族・収入・支出・資産を入力すると、キャッシュフロー表とグラフが自動で再計算されます。前提を変えるたびにこのサマリーが更新されるので、「住宅ローンを繰り上げたら」「配偶者がフルタイムに戻ったら」といった見直しを試せます。毎日の記録はヘッダーの「家計簿」から。バックアップは右上の⚙設定にあります。</p>
+    <p class="hint">「前提の入力」タブで家族・収入・支出・資産を入力すると、キャッシュフロー表とグラフが自動で再計算されます。前提を変えるたびにこのサマリーが更新されるので、「住宅ローンを繰り上げたら」「配偶者がフルタイムに戻ったら」といった見直しを試せます。毎日の記録はヘッダーの「家計簿」から。バックアップは右上の⚙設定にあります。困ったときは右下の💬使い方ガイドも使えます。</p>
     <details class="help"><summary>試算の前提について</summary>
     <p class="mini">・税金/社会保険料は年収帯ごとの実効負担率（給与8〜33%、年金10%）で概算しています。<br>
     ・資産は「現金」と「投資」を分けて計算します。投資は資産ごとの利回りで月次複利、毎月の積立は現金から自動振替、取り崩しは現金に入ります。赤字の年は現金→投資の順に取り崩します。<br>
@@ -733,8 +952,9 @@ function renderHome(){
     ・年金は65歳基準の額に、繰上げ-0.4%/月・繰下げ+0.7%/月を掛けて調整します。<br>
     ・年齢は「年 − 生年」で計算（誕生月は考慮しません）。実際の数値を保証するものではありません。</p></details>
   </div>`;
+  bindCollapse(el);
   const hw=document.getElementById("homeWizBtn"); if(hw) hw.onclick=wzOpen;
-  const db=document.getElementById("diagWizBtn"); if(db) db.onclick=wzOpen;
+  const dt=document.getElementById("diagToggle"); if(dt) dt.onclick=()=>{ const o=isOpen("diag",false); setOpen("diag",!o); render(); };
 }
 
 /* ================= かんたん設定ガイド（会話形式ウィザード） ================= */
@@ -759,6 +979,7 @@ const WZ_STEPS=[
   {id:"eduPlan",type:"choice",q:"お子さんの進路の方針に近いのは？（あとで子ごとに調整できます）",options:[{l:"できるだけ公立",v:"public"},{l:"大学は私立想定",v:"uni_private"},{l:"中学から私立も",v:"private"},{l:"わからない（標準）",v:"std"}],skip:a=>!a.kids},
   {id:"living",type:"number",q:"毎月の生活費は？",hint:"住居費・教育費・保険は除く。食費・光熱費・通信・日用品などの合計。",unit:"万円/月",def:20,min:1,max:100},
   {id:"insurance",type:"number",q:"生命保険などの保険料は？（年間、なければ0）",unit:"万円/年",def:20,min:0,max:300},
+  {id:"deathAmount",type:"number",q:"万一のときの死亡保険金は？（加入中の生命保険の保険金額。なければ0）",unit:"万円",def:0,min:0,max:30000},
   {id:"savings",type:"number",q:"今の預貯金（すぐ使えるお金）は？",unit:"万円",def:300,min:0,max:200000},
   {id:"invest",type:"number",q:"投資（NISA・株・投信など）の今の残高は？なければ0。",unit:"万円",def:0,min:0,max:200000},
   {id:"monthlyInvest",type:"number",q:"毎月の積立額は？（NISA等、なければ0）",unit:"万円/月",def:0,min:0,max:100},
@@ -852,7 +1073,7 @@ function wzSummary(){
   if(a.housing==="own_loan") R.push(["住宅ローン",`残${a.loanBal}万円・${a.loanRate}%・あと${a.loanYears}年`]);
   if(a.kids) R.push(["進路方針",{public:"できるだけ公立",uni_private:"大学は私立想定",private:"中学から私立も",std:"標準"}[a.eduPlan]||"標準"]);
   R.push(["生活費",(a.living||0)+"万円/月"]);
-  R.push(["保険料",(a.insurance||0)+"万円/年"]);
+  R.push(["保険料",(a.insurance||0)+"万円/年"+((+a.deathAmount||0)>0?`（死亡保障 ${a.deathAmount}万円）`:"")]);
   R.push(["預貯金",(a.savings||0)+"万円"]);
   R.push(["投資残高",(a.invest||0)+"万円"]);
   R.push(["毎月の積立",(a.monthlyInvest||0)+"万円/月"]);
@@ -894,7 +1115,9 @@ function wzApply(a){
   else if(a.housing==="own_loan"){ loan.on=true; loan.principal=+a.loanBal||0; loan.rate=+a.loanRate||1.0; loan.termYears=Math.max(1,+a.loanYears||25); loan.startYear=baseYear; maintenance=wzOwnMaint(nowAge); }
   else if(a.housing==="own_free") maintenance=wzOwnMaint(nowAge);
   const expenses=[];
-  if((+a.insurance||0)>0) expenses.push({id:uid(),category:"支払保険料",name:"保険料",targetId:"self",amount:+a.insurance,fromAge:nowAge,toAge:64,cycle:1});
+  const insurances=[];
+  const prem=+a.insurance||0, deathAmt=+a.deathAmount||0;
+  if(prem>0||deathAmt>0) insurances.push({id:uid(),type:"life",memberId:"self",name:"死亡保険",amount:deathAmt,toAge:64,premium:prem});
   const educations=[];
   if(a.kids){ const preset=EDU_PRESETS[a.eduPlan]||EDU_PRESETS.std; members.filter(m=>m.role==="child").forEach(c=>educations.push({id:uid(),childId:c.id,independentAge:22,choices:Object.assign({},preset)})); }
   const assets=[{id:uid(),name:"預貯金",type:"cash",balance:+a.savings||0,rate:0.1}];
@@ -902,7 +1125,8 @@ function wzApply(a){
   if(inv>0||mo>0) assets.push({id:uid(),name:"投資（NISA等）",type:"invest",balance:inv,rate:3.0,monthly:mo,accumEndAge:64,drawStartAge:65,drawMonthly:0});
   const appliances=applStdSet(baseYear, a.housing!=="rent");
   const keepKakeibo=S.kakeibo, keepScen=S.scenarios;
-  S={ baseYear, inflation:(+S.inflation||0), members, incomes, living, housing:{rent,loan,maintenance}, expenses, educations, assets, appliances };
+  S={ baseYear, inflation:(+S.inflation||0), inputMode:"simple", simple:JSON.parse(JSON.stringify(a)),
+      members, incomes, living, housing:{rent,loan,maintenance}, expenses, insurances, educations, assets, appliances };
   if(keepKakeibo) S.kakeibo=keepKakeibo;
   if(Array.isArray(keepScen)) S.scenarios=keepScen;
   ensureKakeibo(); ensurePlanModel(); commit();
@@ -942,10 +1166,17 @@ function diagnosisCard(rows){
   const comment={A:"とても健全なプランです。この調子で。",B:"おおむね良好です。いくつか整えるとより安心です。",C:"注意点がいくつかあります。下の改善ポイントを確認しましょう。",D:"見直しをおすすめします。改善ポイントから着手しましょう。",E:"早めの見直しが必要です。まずは支出と住居費から。"}[rank];
   const ic=lv=>lv==="good"?"◎":lv==="ok"?"○":"⚠";
   const items=D.map(d=>`<div class="diag-item"><div class="h"><span class="ic ${d.lv}">${ic(d.lv)}</span><span class="k">${d.k}</span></div><div class="msg">${d.msg}</div>${d.adv?`<div class="adv">💡 ${d.adv}</div>`:""}</div>`).join("");
+  const open=isOpen("diag",false);
   return `<div class="card">
-    <div class="diag-badge"><div class="diag-rank ${rank}">${rank}</div><div><h2 style="margin:0">ライフプラン診断</h2><p class="hint" style="margin:2px 0 0">${comment}</p></div></div>
-    ${items}
-    <p class="mini" style="margin-top:10px">この診断はアプリ内の計算だけで自動判定した目安です（助言を保証するものではありません）。前提を変えると自動で再判定されます。設定が大変なときは <button class="wzskip" id="diagWizBtn" style="font-size:12px">🪄 かんたん設定ガイド</button> もどうぞ。</p>
+    <div class="diag-badge">
+      <div class="diag-rank ${rank}">${rank}</div>
+      <div style="flex:1"><h2 style="margin:0">ライフプラン診断</h2><p class="hint" style="margin:2px 0 0">${comment}</p></div>
+      <button class="btn ghost sm" id="diagToggle">${open?"閉じる ▲":"詳しく見る ▼"}</button>
+    </div>
+    <div id="diagItems" style="${open?"":"display:none"}">
+      ${items}
+      <p class="mini" style="margin-top:10px">この診断はアプリ内の計算だけで自動判定した目安です（助言を保証するものではありません）。前提を変えると自動で再判定されます。</p>
+    </div>
   </div>`;
 }
 
@@ -1056,34 +1287,24 @@ function incomeCard(inc){
 /* ---------- 支出 ---------- */
 function renderExpense(){
   const el=document.getElementById("planBody");
-  el.innerHTML=`
-  <div class="card"><h2>生活費</h2>
-    <p class="hint">本人の年齢帯ごとの月額を入力します（万一の見直し時に使います）。</p>
-    <div id="livList"></div>
-    <button class="btn ghost sm addbtn" id="addLiv">+ 期間を追加</button></div>
-
-  <div class="card"><h2>住宅費</h2>
-    <div id="housing"></div></div>
-
-  <div class="card"><h2>教育費</h2>
-    <p class="hint">子ごとに進路を選ぶと、その子の年齢に合わせて教育費が自動計上されます（金額は文科省統計の目安・万円/年）。</p>
-    <div id="eduList"></div></div>
-
-  <div class="card"><h2>電化製品の買い替え</h2>
-    <p class="hint">購入した年・金額と想定の寿命（耐用年数）を設定すると、寿命が来るたびに同じ金額が買い替え費として自動計上されます。購入年は実際に買った年に直してください。</p>
-    <div id="applList"></div>
+  const applBody=`<div id="applList"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
       <select id="applPreset" style="width:auto">${APPL_PRESETS.map(([n,ly,p])=>`<option value="${n}">${n}（目安 ${ly}年・${p}万円）</option>`).join("")}</select>
       <button class="btn ghost sm" id="addApplPre">+ 追加</button>
       <button class="btn ghost sm" id="addApplFree">+ 自由に追加</button>
       <button class="btn ghost sm" id="applBulk">標準セットをまとめて追加</button>
     </div>
-    <p class="mini" id="applSum" style="margin-top:8px"></p></div>
-
-  <div class="card"><h2>その他の支出（車・旅行 など）</h2>
-    <p class="hint">「金額 × 対象者の年齢帯 × 何年ごと」で、周期的な支出をまとめて表現します。保険料は「保険」タブでの登録がおすすめです（シミュレーションに連動します）。</p>
-    <div id="expList"></div>
-    <button class="btn ghost sm addbtn" id="addExp">+ 支出を追加</button></div>`;
+    <p class="mini" id="applSum" style="margin-top:8px"></p>`;
+  el.innerHTML=
+    collapseCard("exp_living","生活費","本人の年齢帯ごとの月額を入力します（万一の見直し時に使います）。",
+      `<div id="livList"></div><button class="btn ghost sm addbtn" id="addLiv">+ 期間を追加</button>`, true)
+    + collapseCard("exp_housing","住宅費","", `<div id="housing"></div>`, true)
+    + collapseCard("exp_edu","教育費","子ごとに進路を選ぶと、その子の年齢に合わせて教育費が自動計上されます（金額は文科省統計の目安・万円/年）。",
+      `<div id="eduList"></div>`, false)
+    + collapseCard("exp_appl","電化製品の買い替え","購入した年・金額と想定の寿命（耐用年数）を設定すると、寿命が来るたびに同じ金額が買い替え費として自動計上されます。購入年は実際に買った年に直してください。",
+      applBody, false)
+    + collapseCard("exp_other","その他の支出（車・旅行 など）","「金額 × 対象者の年齢帯 × 何年ごと」で、周期的な支出をまとめて表現します。保険料は「保険」タブでの登録がおすすめです（シミュレーションに連動します）。",
+      `<div id="expList"></div><button class="btn ghost sm addbtn" id="addExp">+ 支出を追加</button>`, false);
 
   // 生活費
   const ll=document.getElementById("livList");
@@ -1118,6 +1339,8 @@ function renderExpense(){
   const xl=document.getElementById("expList");
   S.expenses.forEach(e=>xl.appendChild(expCard(e)));
   document.getElementById("addExp").onclick=()=>{S.expenses.push({id:uid(),category:"その他・将来の夢",name:"新しい支出",targetId:S.members[0].id,amount:10,fromAge:30,toAge:60,cycle:1});commit();};
+
+  bindCollapse(el);
 }
 function applNextYear(ap){
   const by=+ap.boughtYear||0, ly=Math.max(1,+ap.lifeYears||10);
@@ -1178,8 +1401,9 @@ const INS_DEFAULTS={
   disability:{monthly:10,waitMonths:2,toAge:65,premium:3},
   pension_edu:{payout:300,payAge:18,payYears:1,premiumToAge:17,premium:15}
 };
-function insPremiumNow(){
+function insPremiumNow(includeCandidate){
   return (S.insurances||[]).reduce((s,p)=>{
+    if(p.status==="candidate"&&!includeCandidate) return s;
     const t=member(p.memberId); if(!t) return s;
     const a=S.baseYear-t.birthYear;
     const limit=p.type==="pension_edu"?(+p.premiumToAge||100):(+p.toAge||100);
@@ -1189,32 +1413,42 @@ function insPremiumNow(){
 function renderInsurance(){
   const el=document.getElementById("planBody");
   ensurePlanModel();
+  const cand=hasCandidateIns();
   el.innerHTML=`
   <div class="card"><h2>保険の設定</h2>
-    <p class="hint">加入している（検討中の）保険を種類別に登録します。保険料は自動でキャッシュフローの「支払保険料」に計上され、保障内容は「分析 → もしもの備え」のシミュレーションに連動します。</p>
+    <p class="hint">加入している保険を種類別に登録します。保険料は自動でキャッシュフローの「支払保険料」に計上され、保障内容は「分析 → もしもの備え」のシミュレーションに連動します。各保険は<b>加入中</b>／<b>検討中</b>を切り替えられます。「検討中」は通常のプランには含めず、もしもの備えで「入った場合」の比較にだけ使われます。</p>
     <div id="insList"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
       ${Object.entries(INS_TYPES).map(([t,d])=>`<button class="btn ghost sm" data-addins="${t}">+ ${d.label}</button>`).join("")}
     </div>
-    <p class="mini" style="margin-top:10px">今年の保険料合計: <b>${insPremiumNow().toFixed(1)}万円/年</b></p>
+    <p class="mini" style="margin-top:10px">加入中の保険料合計: <b>${insPremiumNow().toFixed(1)}万円/年</b>${cand?` ／ 検討中を加えると <b>${insPremiumNow(true).toFixed(1)}万円/年</b>（+${candidatePremium().toFixed(1)}万円）`:""}</p>
+    ${cand?`<p class="mini" style="color:var(--accent)">🔎 検討中の保険があります。「分析 → もしもの備え」で「検討中を追加した場合」の比較が見られます。</p>`:""}
     ${S.expenses.some(e=>e.category==="支払保険料")?`<p class="mini" style="color:var(--warn)">⚠ 「支出 → その他の支出」にも保険料の項目があります。こちらに登録し直した場合は、二重計上にならないよう古い方を削除してください。</p>`:""}
   </div>`;
   const il=document.getElementById("insList");
   if(!(S.insurances||[]).length) il.innerHTML=`<p class="mini">まだ登録がありません。下のボタンから追加してください。</p>`;
   (S.insurances||[]).forEach(p=>{
     const meta=INS_TYPES[p.type]||INS_TYPES.life;
-    const d=document.createElement("div"); d.className="itemrow";
-    d.style.gridTemplateColumns=`1.2fr 1fr ${meta.fields.map(()=>"86px").join(" ")} 96px auto`;
+    const isCand=p.status==="candidate";
+    const d=document.createElement("div"); d.className="itemrow"; d.style.display="block";
+    if(isCand) d.style.borderColor="var(--accent)";
     d.innerHTML=`
-      <div><label class="f">${meta.label}</label><input type="text" value="${(p.name||meta.label).replace(/"/g,"&quot;")}" data-k="name"></div>
-      <div><label class="f">対象者</label><select data-k="memberId">${S.members.map(m=>`<option value="${m.id}"${m.id===p.memberId?" selected":""}>${m.name}</option>`).join("")}</select></div>
-      ${meta.fields.map(([k,label,step])=>`<div><label class="f">${label}</label><input type="number" step="${step}" value="${p[k]==null?"":p[k]}" data-k="${k}"></div>`).join("")}
-      <div><label class="f">保険料(万円/年)</label><input type="number" step="0.1" value="${p.premium}" data-k="premium"></div>
-      <div><button class="btn danger sm" title="削除">×</button></div>`;
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <span class="tag">${meta.label}</span>
+        <div class="seg2" style="font-size:12px"><button data-st="active" class="${!isCand?"on":""}">加入中</button><button data-st="candidate" class="${isCand?"on":""}">検討中</button></div>
+        <button class="btn danger sm" data-rm style="margin-left:auto">×</button>
+      </div>
+      <div class="grid" style="grid-template-columns:1.2fr 1fr ${meta.fields.map(()=>"minmax(86px,1fr)").join(" ")} 96px">
+        <div><label class="f">名称</label><input type="text" value="${(p.name||meta.label).replace(/"/g,"&quot;")}" data-k="name"></div>
+        <div><label class="f">対象者</label><select data-k="memberId">${S.members.map(m=>`<option value="${m.id}"${m.id===p.memberId?" selected":""}>${m.name}</option>`).join("")}</select></div>
+        ${meta.fields.map(([k,label,step])=>`<div><label class="f">${label}</label><input type="number" step="${step}" value="${p[k]==null?"":p[k]}" data-k="${k}"></div>`).join("")}
+        <div><label class="f">保険料(万円/年)</label><input type="number" step="0.1" value="${p.premium}" data-k="premium"></div>
+      </div>`;
     d.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
       const k=inp.dataset.k; p[k]=(k==="name"||k==="memberId")?e.target.value:+e.target.value; commit();
     });
-    d.querySelector(".danger").onclick=()=>{ if(!confirm(`「${p.name||meta.label}」を削除しますか？`)) return; S.insurances=S.insurances.filter(x=>x!==p); commit(); };
+    d.querySelectorAll("[data-st]").forEach(b=>b.onclick=()=>{ p.status=b.dataset.st==="candidate"?"candidate":"active"; commit(); });
+    d.querySelector("[data-rm]").onclick=()=>{ if(!confirm(`「${p.name||meta.label}」を削除しますか？`)) return; S.insurances=S.insurances.filter(x=>x!==p); commit(); };
     il.appendChild(d);
   });
   el.querySelectorAll("[data-addins]").forEach(b=>b.onclick=()=>{
@@ -1307,22 +1541,44 @@ function renderHousing(box){
   box.querySelector("#addMaint").onclick=()=>{h.maintenance.push({name:"維持費",annual:10,fromAge:30,toAge:100,cycle:1});commit();};
 }
 function eduCard(edu){
+  if(!edu.amounts||typeof edu.amounts!=="object") edu.amounts={};
   const c=member(edu.childId);
+  // 総額（0〜独立まで一度シミュレートして合計）
+  let total=0; for(let a=0;a<=25;a++) total+=eduAt(edu,a);
   const d=document.createElement("div"); d.className="itemrow"; d.style.display="block";
   d.innerHTML=`<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
     <span class="tag">${c?c.name:"子"}</span>
-    <div style="max-width:170px"><label class="f">独立年齢</label><input type="number" data-k="independentAge" value="${edu.independentAge}"></div>
-    <button class="btn danger sm" style="margin-left:auto">×</button></div>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))" id="stg_${edu.id}"></div>`;
+    <span class="mini">在学中の教育費 合計 約 <b>${MAN(total)}万円</b></span>
+    <div style="max-width:150px;margin-left:auto"><label class="f">独立年齢</label><input type="number" data-k="independentAge" value="${edu.independentAge}"></div>
+    <button class="btn danger sm">×</button></div>
+    <p class="mini" style="margin:-2px 0 8px">各段階で進路を選ぶと目安の金額（万円/年）が入ります。金額は直接書き換えられます。大学は年数も変更できます（短大2年・薬学/医歯6年など）。</p>
+    <div id="stg_${edu.id}"></div>`;
   d.querySelector("[data-k]").onchange=e=>{edu.independentAge=+e.target.value;commit();};
   d.querySelector(".danger").onclick=()=>{S.educations=S.educations.filter(x=>x!==edu);commit();};
   const sg=d.querySelector(`#stg_${edu.id}`);
   EDU_STAGES.forEach(st=>{
-    const wrap=document.createElement("div");
+    const row=document.createElement("div"); row.className="edu-row";
     const sel=edu.choices[st.label]||st.opts[0];
-    wrap.innerHTML=`<label class="f">${st.label}</label><select>${st.opts.map(o=>`<option${o===sel?" selected":""}>${o}</option>`).join("")}</select>`;
-    wrap.querySelector("select").onchange=e=>{edu.choices[st.label]=e.target.value;commit();};
-    sg.appendChild(wrap);
+    const amt=eduAmount(edu,st.label);
+    const isNone=sel==="なし";
+    row.innerHTML=`
+      <div class="edu-lab">${st.uni?"大学等":st.label}</div>
+      <select class="edu-sel">${st.opts.map(o=>`<option${o===sel?" selected":""}>${o}</option>`).join("")}</select>
+      <div class="edu-amt"><input type="number" class="edu-amtin" value="${isNone?0:amt}" ${isNone?"disabled":""}><span class="mini">万円/年</span></div>
+      ${st.uni?`<div class="edu-yr"><input type="number" class="edu-yrin" value="${eduUniYears(edu)}" min="0" max="8" ${isNone?"disabled":""}><span class="mini">年間</span></div>`:""}`;
+    // 進路の選択変更 → 金額の手入力をリセットして目安を再表示、大学は年数も既定に
+    row.querySelector(".edu-sel").onchange=e=>{
+      edu.choices[st.label]=e.target.value;
+      if(edu.amounts) delete edu.amounts[st.label];
+      if(st.uni){ delete edu.uniYears; const y=18+eduUniYears(edu); if((+edu.independentAge||0)<y) edu.independentAge=y; }
+      commit();
+    };
+    // 金額の直接編集
+    row.querySelector(".edu-amtin").onchange=e=>{ edu.amounts[st.label]=Math.max(0,+e.target.value||0); commit(); };
+    // 大学の年数編集（独立年齢が不足なら自動で引き上げ）
+    const yr=row.querySelector(".edu-yrin");
+    if(yr) yr.onchange=e=>{ edu.uniYears=Math.max(0,+e.target.value||0); const y=18+eduUniYears(edu); if((+edu.independentAge||0)<y) edu.independentAge=y; commit(); };
+    sg.appendChild(row);
   });
   return d;
 }
@@ -1417,11 +1673,13 @@ function renderAssets(){
 }
 
 /* ---------- キャッシュフロー表 ---------- */
-function renderCF(){
-  const {rows}=computeCF();
+function renderCF(opt,scen){
+  const {rows}=computeCF(opt);
   const el=document.getElementById("anaBody");
   const R=[
     ["収入：給与・退職金","salary","in"],["収入：年金","pension","in"],["収入：その他","other","in"],
+    ...(scen==="death"?[["　うち遺族年金","survivorPen","sub"]]:[]),
+    ...(scen==="disable"?[["　うち公的給付・保険","disBen","sub"]]:[]),
     ["収入合計","incomeTotal","tot"],
     ["生活費","living","ex"],["住宅費","housing","ex"],["教育・結婚","education","ex"],
     ["車両費","car","ex"],["家電買替","appliance","ex"],["その他・将来の夢","other_exp","ex"],["税・社保","tax","ex"],["支払保険料","insurance","ex"],
@@ -1434,24 +1692,27 @@ function renderCF(){
   let body="";
   R.forEach(([label,key,type])=>{
     const cls=type==="tot"?"total":"";
-    body+=`<tr class="${cls}"><td>${label}</td>`+rows.map(r=>{
+    const st=type==="sub"?' style="color:var(--sub);font-size:12px"':"";
+    body+=`<tr class="${cls}"><td${st}>${label}</td>`+rows.map(r=>{
       let v=r[key]; if(key==="other") v=r.other+r.retire; // その他収入にretireは既にsalaryへ…調整
       const neg=(type==="bal"||type==="net")&&v<0;
       const yneg=r.netWorth<0?"negyear":"";
-      return `<td class="${neg?"neg":""} ${yneg}">${MAN(v)}</td>`;
+      return `<td class="${neg?"neg":""} ${yneg}"${st}>${MAN(v)}</td>`;
     }).join("")+`</tr>`;
   });
-  el.innerHTML=`<div class="card"><h2>キャッシュフロー表</h2>
+  el.innerHTML=`<div class="card"><h2>キャッシュフロー表${scen&&scen!=="normal"?`（${scenLabel(scen)}）`:""}</h2>
+    ${scenBanner(scen)}
     <p class="hint">単位：万円。横スクロールできます。資産残高がマイナスの年は赤く表示されます。</p>
     <div class="tblwrap"><table class="data"><thead>${head}</thead><tbody>${body}</tbody></table></div></div>`;
 }
 
 /* ---------- グラフ ---------- */
-function renderCharts(){
-  const {rows}=computeCF();
+function renderCharts(opt,scen){
+  const {rows}=computeCF(opt);
   const el=document.getElementById("anaBody");
   el.innerHTML=`
-    <div class="card"><h2>資産残高の推移</h2><div class="chartbox">${lineChart(rows)}</div></div>
+    ${scenBanner(scen)}
+    <div class="card"><h2>資産残高の推移${scen&&scen!=="normal"?`（${scenLabel(scen)}）`:""}</h2><div class="chartbox">${lineChart(rows)}</div></div>
     <div class="card"><h2>年度別の収支差額</h2><div class="chartbox">${balanceBars(rows)}</div>
       <div class="legend"><span><i style="background:var(--pos)"></i>黒字</span><span><i style="background:var(--neg)"></i>赤字</span></div></div>
     <div class="card"><h2>支出の内訳（5年ごと）</h2><div class="chartbox">${stackedExpense(rows)}</div>
@@ -1678,7 +1939,7 @@ function renderScenario(){
   el.innerHTML=`
   <div class="card">
     <h2>プランの保存と切り替え</h2>
-    <p class="hint">今の前提に名前を付けて保存し、複数のプランを切り替えながら比較できます。「切り替え」を押すと、編集中の内容は使用中のプランへ自動で上書き保存されてから、選んだプランに切り替わります（家計簿の記録は共通です）。</p>
+    <p class="hint">今の前提に名前を付けて保存し、複数のプランを切り替えながら比較できます。「切り替え」を押すと、編集中の内容は使用中のプランへ自動で上書き保存されてから、選んだプランに切り替わります（家計簿の記録は共通です）。保存したプランは「複製」でコピーを作り、コピーの方だけ一部を変更して見比べることもできます。</p>
     <button class="btn" id="snapSave">現在のプランを別名で保存</button>
   </div>
   <div class="card">
@@ -1691,7 +1952,7 @@ function renderScenario(){
         const isActive=sn.id===S.activeScenarioId;
         return `<tr><td>${dot(col)}${esc(sn.name||"（無題）")}${isActive?' <span class="tag">使用中</span>':""}<br><span class="mini">${sn.savedAt?sn.savedAt.slice(0,10):""}</span></td>
           ${money(m.a65,m.a65===best.a65)}${money(m.peak,m.peak===best.peak)}${negTd(m)}${money(m.final,m.final===best.final)}${diffTd(m)}
-          <td style="white-space:nowrap">${isActive?"":`<button class="btn sm" data-load="${sn.id}">切り替え</button> `}<button class="btn danger sm" data-delsn="${sn.id}">×</button></td></tr>`;
+          <td style="white-space:nowrap">${isActive?"":`<button class="btn sm" data-load="${sn.id}">切り替え</button> `}<button class="btn ghost sm" data-dup="${sn.id}">複製</button> <button class="btn danger sm" data-delsn="${sn.id}">×</button></td></tr>`;
       }).join("")}
     </tbody></table></div>
     ${S.scenarios.length?`<div class="chartbox" style="margin-top:14px">${scenarioChart(cur.rows,S.scenarios.map(sn=>rowsFor(sn).rows))}</div>
@@ -1726,6 +1987,14 @@ function renderScenario(){
     if(S.activeScenarioId===b.dataset.delsn) delete S.activeScenarioId;
     commit();
   });
+  el.querySelectorAll("[data-dup]").forEach(b=>b.onclick=()=>{
+    const sn=S.scenarios.find(x=>x.id===b.dataset.dup); if(!sn) return;
+    const def=`${sn.name||"無題"}のコピー`;
+    const name=(prompt("複製したプランの名前", def)||"").trim(); if(!name) return;
+    const copy={id:uid(), name, savedAt:new Date().toISOString(), data:JSON.parse(JSON.stringify(sn.data))};
+    S.scenarios.splice(S.scenarios.indexOf(sn)+1, 0, copy);
+    commit();
+  });
 }
 function scenarioChart(baseRows, others){
   const all=[baseRows,...others];
@@ -1743,11 +2012,21 @@ function scenarioChart(baseRows, others){
 }
 
 /* ========== ライフイベント年表 ========== */
-function renderTimeline(){
+function renderTimeline(opt,scen){
   const el=document.getElementById("anaBody");
-  const {rows,prim,assetInfo}=computeCF();
+  const cf=computeCF(opt);
+  const {rows,prim,assetInfo,sched}=cf;
   const evByYear={};
   const add=(year,txt)=>{ if(!year) return; (evByYear[year]=evByYear[year]||[]).push(txt); };
+  // 想定シナリオ固有のイベント
+  if(scen&&scen!=="normal"&&S.emergency){
+    const em=S.emergency;
+    const t=member(scen==="death"?em.target:(em.dis&&em.dis.target))||emgAdults()[0];
+    const yr=Math.max(S.baseYear,+((scen==="death"?em.year:em.dis&&em.dis.year))||(S.baseYear+1));
+    add(yr, scen==="death"?`⚠ ${t?t.name:""} 死亡の想定`:`⚠ ${t?t.name:""} 就業不能の想定`);
+    if(scen==="death") add(yr,"遺族年金 受給開始");
+    if(scen==="disable"){ add(yr,"傷病手当金"); add(yr+2,"障害年金へ切替（概算）"); }
+  }
   // 教育イベント
   S.members.filter(m=>m.role==="child").forEach(c=>{
     const stages=[[6,"小学校入学"],[12,"中学校入学"],[15,"高校入学"],[18,"大学等"]];
@@ -1761,8 +2040,7 @@ function renderTimeline(){
     if(inc.type==="pension") add(m.birthYear+(+inc.claimAge||65),`${m.name} 年金受給開始`);
   });
   // ローン完済・繰上返済
-  const sched=computeCF().sched;
-  if(S.housing.loan&&S.housing.loan.on) add(sched.payoffYear,"住宅ローン完済");
+  if(S.housing.loan&&S.housing.loan.on) add(sched.payoffYear,scen==="death"&&S.emergency&&S.emergency.danshin?"住宅ローン完済（団信）":"住宅ローン完済");
   (S.housing.loan&&S.housing.loan.prepays||[]).forEach(p=>{ if(+p.amount>0) add(+p.year,`繰上返済 ${MAN(p.amount)}万`); });
   // 大きな支出イベント（車・その他の周期支出、住宅メンテ）
   S.expenses.forEach(e=>{ if(e.amount<50) return; const t=member(e.targetId)||prim;
@@ -1782,8 +2060,9 @@ function renderTimeline(){
   (assetInfo||[]).forEach(x=>{ if(x.depleteYear) add(x.depleteYear,`投資「${x.name}」枯渇`); });
   const years=Object.keys(evByYear).map(Number).filter(y=>y>=S.baseYear).sort((a,b)=>a-b);
   el.innerHTML=`
+  ${scenBanner(scen)}
   <div class="card">
-    <h2>ライフイベント年表</h2>
+    <h2>ライフイベント年表${scen&&scen!=="normal"?`（${scenLabel(scen)}）`:""}</h2>
     <p class="hint">これから起きる主な出来事と、その年齢を一覧にしました。支出が重なる年が「注意すべき年」です。</p>
     ${years.length?`<div style="position:relative">${years.map(y=>{
       const r=rows.find(x=>x.year===y);
@@ -1809,11 +2088,22 @@ function emgNeed(d){
   for(let i=0;i<24;i++){ const mid=(lo+hi)/2; if(minNW(mid)>=0) hi=mid; else lo=mid; }
   return {need:Math.ceil(hi/10)*10, margin:null};
 }
-/* 対象者の死亡保険（保険設定）の合計保険金額 */
-function lifeInsFor(memberId, atYear){
+/* 対象者の死亡保険（保険設定）の合計保険金額。includeCandidateで検討中も含める */
+function lifeInsFor(memberId, atYear, includeCandidate){
   const t=member(memberId); if(!t) return 0;
   const a=atYear-t.birthYear;
-  return (S.insurances||[]).filter(p=>p.type==="life"&&p.memberId===memberId&&a<=(+p.toAge||100)).reduce((s,p)=>s+(+p.amount||0),0);
+  return (S.insurances||[]).filter(p=>p.type==="life"&&p.memberId===memberId&&a<=(+p.toAge||100)&&(p.status!=="candidate"||includeCandidate)).reduce((s,p)=>s+(+p.amount||0),0);
+}
+/* 検討中の保険が1件でもあるか */
+function hasCandidateIns(){ return (S.insurances||[]).some(p=>p.status==="candidate"); }
+/* 追加でかかる検討中の年間保険料（現在の対象者年齢で有効なもの） */
+function candidatePremium(){
+  return (S.insurances||[]).filter(p=>p.status==="candidate").reduce((s,p)=>{
+    const t=member(p.memberId); if(!t) return s;
+    const a=S.baseYear-t.birthYear;
+    const limit=p.type==="pension_edu"?(+p.premiumToAge||100):(+p.toAge||100);
+    return s+(a>=0&&a<=limit?(+p.premium||0):0);
+  },0);
 }
 /* 高額療養費: 月の医療費(万円)に対する自己負担額(万円・70歳未満の概算) */
 function hiCostSelfPay(annualSalMan, medCostMan){
@@ -1868,6 +2158,13 @@ function renderEmgDeath(){
   const shortfall=Math.max(0,need-ins);
   const loanOn=S.housing.loan&&S.housing.loan.on;
   const noFamily=!sv&&!kids.length;
+  // 検討中の保険を追加した場合
+  const cand=hasCandidateIns();
+  const insC=lifeInsFor(target.id,year,true)+extra;
+  const emgC=cand?computeCF({death:{memberId:target.id,year,insurance:insC,danshin:em.danshin,livingPct:em.livingPct},includeCandidate:true}):null;
+  const negC=emgC?emgC.rows.find(r=>r.netWorth<0):null;
+  const endC=emgC?emgC.rows[emgC.rows.length-1]:null;
+  const addPrem=cand?candidatePremium():0;
   el.innerHTML=`
   <div class="card">
     <h2>万一の場合の想定</h2>
@@ -1896,8 +2193,17 @@ function renderEmgDeath(){
           ?`<b style="color:var(--neg)">⚠ 必要保障額の目安: ${MAN(need)}万円 ／ 現在の設定 ${MAN(ins)}万円 → あと ${MAN(shortfall)}万円 不足</b><p class="mini" style="margin:4px 0 0">死亡保険金を合計 ${MAN(need)}万円 にすると、遺族の資産が生涯マイナスにならない試算です。</p>`
           :`<b style="color:var(--pos)">✓ 現在の死亡保険金 ${MAN(ins)}万円 で足りています（必要保障額の目安: ${MAN(need)}万円）</b><p class="mini" style="margin:4px 0 0">余裕は約 ${MAN(ins-need)}万円。保険料とのバランスを見て調整してください。</p>`}
     </div>
-    <div class="chartbox" style="margin-top:14px">${scenarioChart(base.rows,[emg.rows])}</div>
-    <div class="legend"><span><i style="background:var(--accent)"></i>現在のプラン</span><span><i style="background:${catColor(1)}"></i>万一の場合</span></div>
+    ${cand?`<div style="margin-top:14px;padding:12px;border:1px solid var(--accent);border-radius:10px;background:var(--bg)">
+      <b style="color:var(--accent)">🔎 検討中の保険に入った場合</b>
+      <div class="brow total" style="grid-template-columns:1fr 1fr 1fr;margin-top:6px"><span class="bname">項目</span><span class="mini" style="text-align:right">現在の保険</span><span class="mini" style="text-align:right">検討中を追加</span></div>
+      <div class="brow" style="grid-template-columns:1fr 1fr 1fr"><span class="bname">死亡保険金の合計</span><span style="text-align:right">${MAN(ins)}万</span><span style="text-align:right">${MAN(insC)}万</span></div>
+      <div class="brow" style="grid-template-columns:1fr 1fr 1fr"><span class="bname">資産が尽きる時期</span><span style="text-align:right;color:${firstNeg?"var(--neg)":"var(--pos)"}">${firstNeg?firstNeg.year+"年":"なし ✓"}</span><span style="text-align:right;color:${negC?"var(--neg)":"var(--pos)"}">${negC?negC.year+"年":"なし ✓"}</span></div>
+      <div class="brow" style="grid-template-columns:1fr 1fr 1fr"><span class="bname">最終年の資産</span><span style="text-align:right;color:${end.netWorth<0?"var(--neg)":""}">${MAN(end.netWorth)}万</span><span style="text-align:right;color:${endC.netWorth<0?"var(--neg)":"var(--pos)"}">${MAN(endC.netWorth)}万</span></div>
+      <p class="mini" style="margin-top:6px">検討中の保険の追加保険料 <b>+${addPrem.toFixed(1)}万円/年</b> も反映した試算です（保険タブで「検討中」に設定した保険）。${(!negC&&firstNeg)?'<b style="color:var(--pos)">→ 追加すると資産の枯渇を回避できます。</b>':""}</p>
+    </div>`:""}
+    <div class="chartbox" style="margin-top:14px">${scenarioChart(base.rows,cand?[emg.rows,emgC.rows]:[emg.rows])}</div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>現在のプラン</span><span><i style="background:${catColor(1)}"></i>万一（現在の保険）</span>${cand?`<span><i style="background:${catColor(2)}"></i>万一（検討中を追加）</span>`:""}</div>
+    <div style="margin-top:12px"><button class="btn ghost sm" data-emgjump="death">この想定でCF表・グラフ・年表を見る</button></div>
     <details class="help"><summary>試算の前提（概算です）</summary>
     <p class="mini">・遺族基礎年金: 18歳未満の子がいる間、81.6万円＋子の加算（第1・2子 各23.5万円、第3子以降 各7.8万円）/年。<br>
     ・遺族厚生年金: 亡くなった方の年金（65歳基準）から基礎年金相当78万円を引いた額の3/4を、配偶者が65歳になるまで支給。中高齢寡婦加算などは考慮しません。<br>
@@ -1912,6 +2218,10 @@ function renderEmgDeath(){
   bind("emIns",e=>{ em.ins[target.id]=Math.max(0,+e.target.value||0); });
   bind("emLiving",e=>{ em.livingPct=clamp(+e.target.value||70,10,100); });
   bind("emDanshin",e=>{ em.danshin=e.target.checked; });
+  bindEmgJump(el);
+}
+function bindEmgJump(el){
+  el.querySelectorAll("[data-emgjump]").forEach(b=>b.onclick=()=>{ anaScen=b.dataset.emgjump; anaSub="cf"; render(); window.scrollTo(0,0); });
 }
 /* --- 病気・入院（短期）の電卓 --- */
 function renderEmgSick(){
@@ -1928,14 +2238,18 @@ function renderEmgSick(){
   const extraCost=days*(+sk.extraDaily||0);
   const offM=Math.max(0,+sk.offMonths||0);
   const loss=sal>0?sal/12*offM*(sk.salaried?1/3:1):0;
-  let ben=0; const benList=[];
+  let ben=0, benC=0; const benList=[];
   (S.insurances||[]).forEach(p=>{
     if(p.memberId!==target.id||age>(+p.toAge||100)) return;
-    if(p.type==="medical"){ const v=(+p.daily||0)*days+(sk.surgery?(+p.surgery||0):0); if(v>0){ ben+=v; benList.push(`${p.name}: 約${v.toFixed(0)}万円`); } }
-    if(p.type==="cancer"&&sk.cancer){ const v=+p.lump||0; if(v>0){ ben+=v; benList.push(`${p.name}: ${MAN(v)}万円`); } }
+    let v=0;
+    if(p.type==="medical") v=(+p.daily||0)*days+(sk.surgery?(+p.surgery||0):0);
+    if(p.type==="cancer"&&sk.cancer) v=+p.lump||0;
+    if(v>0){ benC+=v; if(p.status!=="candidate"){ ben+=v; benList.push(`${p.name}: 約${v.toFixed(0)}万円`); } }
   });
   const burden=selfPay+extraCost+loss;
   const net=burden-ben;
+  const cand=hasCandidateIns();
+  const netC=burden-benC;
   const cash=S.assets.filter(a=>a.type!=="invest").reduce((s,a)=>s+(+a.balance||0),0);
   const PRESETS=[["盲腸（虫垂炎）",7,50,false],["骨折・手術",30,80,false],["がん治療",60,200,true],["脳卒中",90,250,false]];
   const row=(label,v,strong)=>`<div class="brow" style="grid-template-columns:1fr 110px"><span class="bname"${strong?' style="font-weight:600"':""}>${label}</span><span style="text-align:right${strong?";font-weight:600":""}">${v}</span></div>`;
@@ -1972,6 +2286,12 @@ function renderEmgSick(){
         :net<=cash?`<b style="color:var(--pos)">✓ 預貯金 ${MAN(cash)}万円 の約${Math.round(net/cash*100)}%で対応できる範囲です</b><p class="mini" style="margin:4px 0 0">高額療養費制度のおかげで、医療費の自己負担には上限があります。貯蓄で備えられる範囲なら、医療保険は「上乗せの安心」という位置づけです。</p>`
         :`<b style="color:var(--neg)">⚠ 預貯金 ${MAN(cash)}万円 を超える負担です</b><p class="mini" style="margin:4px 0 0">緊急予備資金を増やすか、医療保障の上乗せを検討しましょう。</p>`}
     </div>
+    ${cand?`<div style="margin-top:12px;padding:12px;border:1px solid var(--accent);border-radius:10px">
+      <b style="color:var(--accent)">🔎 検討中の保険に入った場合</b>
+      ${row("民間保険の給付（検討中も含む）","−"+benC.toFixed(1)+"万円")}
+      ${row("差し引きの自己負担",`<b style="color:${netC>cash?"var(--neg)":"var(--pos)"}">${netC.toFixed(1)}万円</b>`,true)}
+      <p class="mini" style="margin-top:4px">検討中を追加すると給付が ${(benC-ben).toFixed(1)}万円 増え、自己負担は ${net.toFixed(1)}万円 → ${netC.toFixed(1)}万円 になります（年間保険料 +${candidatePremium().toFixed(1)}万円）。</p>
+    </div>`:""}
     <details class="help"><summary>計算の前提（概算です）</summary>
     <p class="mini">・高額療養費制度: 70歳未満・年収区分ごとの月額上限（例: 年収370〜770万円なら 80,100円＋(医療費−267,000円)×1%）。月をまたぐ入院は月ごとに上限を適用します。多数回該当（4回目以降の軽減）は考慮しません。<br>
     ・傷病手当金: 会社員・公務員が対象。休業中は給与の約2/3が支給されるとして、減少分＝1/3で計算します。<br>
@@ -2003,9 +2323,14 @@ function renderEmgDisable(){
   const dPub={memberId:target.id,year,salaried:dd.salaried,useIns:false};
   const pub=computeCF({disable:dPub});
   const priv=computeCF({disable:Object.assign({},dPub,{useIns:true})});
-  const curMonthly=(S.insurances||[]).filter(p=>p.type==="disability"&&p.memberId===target.id&&(year-target.birthYear)<=(+p.toAge||65)).reduce((s,p)=>s+(+p.monthly||0),0);
+  const disMonthly=st=>(S.insurances||[]).filter(p=>p.type==="disability"&&p.memberId===target.id&&(year-target.birthYear)<=(+p.toAge||65)&&(st?true:p.status!=="candidate")).reduce((s,p)=>s+(+p.monthly||0),0);
+  const curMonthly=disMonthly(false);       // 加入中のみ
+  const curMonthlyAll=disMonthly(true);      // 検討中も含む
+  const cand=hasCandidateIns()&&curMonthlyAll>curMonthly;
+  const privC=cand?computeCF({disable:Object.assign({},dPub,{useIns:true}),includeCandidate:true}):null;
   const needM=disNeed(dPub);
   const negP=pub.rows.find(r=>r.netWorth<0), negI=priv.rows.find(r=>r.netWorth<0);
+  const negC=privC?privC.rows.find(r=>r.netWorth<0):null;
   const y0=pub.rows.find(r=>r.year===year), y2=pub.rows.find(r=>r.year===year+2);
   el.innerHTML=`
   <div class="card">
@@ -2032,8 +2357,13 @@ function renderEmgDisable(){
         :curMonthly>=needM?`<b style="color:var(--pos)">✓ 必要な就業不能保障は月${needM}万円 → 現在 月${curMonthly}万円 で充足しています</b>`
         :`<b style="color:var(--neg)">⚠ 必要な就業不能保障の目安: 月${needM}万円 ／ 現在 月${curMonthly}万円 → 月あと${(needM-curMonthly).toFixed(1)}万円 不足</b><p class="mini" style="margin:4px 0 0">65歳まで月${needM}万円の給付があれば、資産が生涯マイナスにならない試算です（「保険」タブで就業不能保険を登録できます）。</p>`}
     </div>
-    <div class="chartbox" style="margin-top:14px">${scenarioChart(base.rows,[pub.rows,priv.rows])}</div>
-    <div class="legend"><span><i style="background:var(--accent)"></i>通常のプラン</span><span><i style="background:${catColor(1)}"></i>公的保障のみ</span><span><i style="background:${catColor(2)}"></i>公的＋民間保険${curMonthly===0?"（未加入のため同じ）":""}</span></div>
+    ${cand?`<div style="margin-top:14px;padding:12px;border:1px solid var(--accent);border-radius:10px;background:var(--bg)">
+      <b style="color:var(--accent)">🔎 検討中の就業不能保険に入った場合</b>
+      <p class="mini" style="margin:4px 0 0">給付が 月${curMonthly}万円 → 月${curMonthlyAll}万円 に増え、資産が尽きる時期が ${negI?negI.year+"年":"なし"} → <b>${negC?negC.year+"年":"なし ✓"}</b> になる試算です（追加保険料 +${candidatePremium().toFixed(1)}万円/年 を反映）。${(!negC&&negI)?'<b style="color:var(--pos)"> → 追加で枯渇を回避できます。</b>':""}</p>
+    </div>`:""}
+    <div class="chartbox" style="margin-top:14px">${scenarioChart(base.rows,cand?[pub.rows,priv.rows,privC.rows]:[pub.rows,priv.rows])}</div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>通常のプラン</span><span><i style="background:${catColor(1)}"></i>公的保障のみ</span><span><i style="background:${catColor(2)}"></i>公的＋現在の保険${curMonthly===0?"（未加入のため同じ）":""}</span>${cand?`<span><i style="background:${catColor(3)}"></i>＋検討中を追加</span>`:""}</div>
+    <div style="margin-top:12px"><button class="btn ghost sm" data-emgjump="disable">この想定でCF表・グラフ・年表を見る</button></div>
     <details class="help"><summary>試算の前提（概算です）</summary>
     <p class="mini">・傷病手当金: 就業不能の年に給与の2/3、翌年に半年分（合計1年6ヶ月）。会社員・公務員のみ。<br>
     ・障害年金: 認定（約1年6ヶ月後）から、障害基礎年金81.6万円＋子の加算＋障害厚生年金（報酬比例相当・会社員のみ）。65歳からは通常の老齢年金に切り替え。いずれも非課税として扱います。<br>
@@ -2044,6 +2374,7 @@ function renderEmgDisable(){
   bind("ddTarget",e=>{ dd.target=e.target.value; });
   bind("ddYear",e=>{ dd.year=Math.max(S.baseYear,+e.target.value||year); });
   bind("ddSalaried",e=>{ dd.salaried=e.target.checked; });
+  bindEmgJump(el);
 }
 /* --- 保険の見直しサマリー --- */
 function renderEmgSummary(){
@@ -2053,43 +2384,54 @@ function renderEmgSummary(){
   const spouse=S.members.find(m=>m.role==="spouse");
   const yearD=Math.max(S.baseYear,+em.year||(S.baseYear+1));
   const cash=S.assets.filter(a=>a.type!=="invest").reduce((s,a)=>s+(+a.balance||0),0);
+  const cand=hasCandidateIns();
   const items=[];
-  const push=(k,st,msg)=>items.push({k,st,msg});
+  const push=(k,st,msg,add)=>items.push({k,st,msg,add});
   // 死亡保障
   [self,spouse].filter(Boolean).forEach(t=>{
     const {need}=emgNeed({memberId:t.id,year:yearD,danshin:em.danshin,livingPct:em.livingPct});
     const cur=lifeInsFor(t.id,yearD)+(+(em.ins[t.id]||0));
-    if(need===0) push(`死亡保障（${t.name}）`, cur>500?"△":"good", cur>500?`保障がなくても遺族の資産は維持できる試算です。現在 ${MAN(cur)}万円 → 減額（保険料の節約）を検討する余地があります`:`保障がなくても遺族の資産は維持できる試算です`);
-    else if(cur>=need) push(`死亡保障（${t.name}）`,"good",`必要保障額 ${MAN(need)}万円 に対し ${MAN(cur)}万円 → 充足しています`);
-    else push(`死亡保障（${t.name}）`,"warn",`必要保障額 ${MAN(need)}万円 に対し ${MAN(cur)}万円 → あと ${MAN(need-cur)}万円 不足`);
+    const curC=lifeInsFor(t.id,yearD,true)+(+(em.ins[t.id]||0));
+    let st,msg;
+    if(need===0){ st=cur>500?"△":"good"; msg=cur>500?`保障がなくても遺族の資産は維持できる試算です。現在 ${MAN(cur)}万円 → 減額（保険料の節約）を検討する余地があります`:`保障がなくても遺族の資産は維持できる試算です`; }
+    else if(cur>=need){ st="good"; msg=`必要保障額 ${MAN(need)}万円 に対し ${MAN(cur)}万円 → 充足しています`; }
+    else { st="warn"; msg=`必要保障額 ${MAN(need)}万円 に対し ${MAN(cur)}万円 → あと ${MAN(need-cur)}万円 不足`; }
+    const add=(cand&&curC>cur)?(need>0&&curC>=need?`検討中を追加すると ${MAN(curC)}万円 → 充足 ✓`:`検討中を追加すると ${MAN(curC)}万円（まだ ${MAN(Math.max(0,need-curC))}万円 不足）`):null;
+    push(`死亡保障（${t.name}）`,st,msg,add);
   });
   // 医療保障（例: 入院60日・医療費150万円）
   {
     const age=S.baseYear-self.birthYear;
     const sal=S.incomes.filter(i=>i.type==="salary"&&i.memberId===self.id).reduce((s,i)=>s+salaryAt(i,age),0);
     const ex=2*hiCostSelfPay(sal,75)+60*0.2;
-    const medBen=(S.insurances||[]).filter(p=>p.type==="medical"&&p.memberId===self.id&&age<=(+p.toAge||100)).reduce((s,p)=>s+(+p.daily||0)*60+(+p.surgery||0),0);
-    const net=ex-medBen;
+    const medOf=inclC=>(S.insurances||[]).filter(p=>p.type==="medical"&&p.memberId===self.id&&age<=(+p.toAge||100)&&(inclC||p.status!=="candidate")).reduce((s,p)=>s+(+p.daily||0)*60+(+p.surgery||0),0);
+    const medBen=medOf(false), medBenC=medOf(true);
+    const net=ex-medBen, netC=ex-medBenC;
     push("医療保障（本人）", net<=cash?"good":"warn",
-      `入院60日・医療費150万円の例: 公的保障後の負担 約${ex.toFixed(0)}万円${medBen>0?`、保険給付 約${medBen.toFixed(0)}万円`:"（医療保険の登録なし）"} → ${net<=0?"保険でカバーできます":net<=cash?`貯蓄 ${MAN(cash)}万円 で対応できる範囲です`:"貯蓄を超える負担の可能性があります"}`);
+      `入院60日・医療費150万円の例: 公的保障後の負担 約${ex.toFixed(0)}万円${medBen>0?`、保険給付 約${medBen.toFixed(0)}万円`:"（医療保険の登録なし）"} → ${net<=0?"保険でカバーできます":net<=cash?`貯蓄 ${MAN(cash)}万円 で対応できる範囲です`:"貯蓄を超える負担の可能性があります"}`,
+      (cand&&medBenC>medBen)?`検討中を追加すると給付 約${medBenC.toFixed(0)}万円・自己負担 約${netC.toFixed(0)}万円`:null);
   }
   // 就業不能（本人）
   {
     const needM=disNeed({memberId:self.id,year:yearD,salaried:em.dis.salaried,useIns:false});
-    const curM=(S.insurances||[]).filter(p=>p.type==="disability"&&p.memberId===self.id).reduce((s,p)=>s+(+p.monthly||0),0);
-    if(needM===0) push("就業不能保障（本人）", curM>0?"△":"good", curM>0?`公的保障と資産だけでも維持できる試算です。現在 月${curM}万円 → 見直しの余地があります`:"公的保障（傷病手当金・障害年金）と資産で維持できる試算です");
-    else if(needM==null) push("就業不能保障（本人）","warn","保障の上乗せだけでは不足します。支出の見直しと合わせて検討を");
-    else if(curM>=needM) push("就業不能保障（本人）","good",`必要 月${needM}万円 に対し 月${curM}万円 → 充足しています`);
-    else push("就業不能保障（本人）","warn",`必要 月${needM}万円 に対し 月${curM}万円 → 月あと${(needM-curM).toFixed(1)}万円 不足`);
+    const dm=inclC=>(S.insurances||[]).filter(p=>p.type==="disability"&&p.memberId===self.id&&(inclC||p.status!=="candidate")).reduce((s,p)=>s+(+p.monthly||0),0);
+    const curM=dm(false), curMC=dm(true);
+    let st,msg;
+    if(needM===0){ st=curM>0?"△":"good"; msg=curM>0?`公的保障と資産だけでも維持できる試算です。現在 月${curM}万円 → 見直しの余地があります`:"公的保障（傷病手当金・障害年金）と資産で維持できる試算です"; }
+    else if(needM==null){ st="warn"; msg="保障の上乗せだけでは不足します。支出の見直しと合わせて検討を"; }
+    else if(curM>=needM){ st="good"; msg=`必要 月${needM}万円 に対し 月${curM}万円 → 充足しています`; }
+    else { st="warn"; msg=`必要 月${needM}万円 に対し 月${curM}万円 → 月あと${(needM-curM).toFixed(1)}万円 不足`; }
+    const add=(cand&&curMC>curM)?(needM>0&&curMC>=needM?`検討中を追加すると 月${curMC}万円 → 充足 ✓`:`検討中を追加すると 月${curMC}万円`):null;
+    push("就業不能保障（本人）",st,msg,add);
   }
   const prem=insPremiumNow();
   const ic=st=>st==="good"?'<span class="ic good" style="color:var(--pos)">◎</span>':st==="warn"?'<span class="ic warn" style="color:var(--neg)">⚠</span>':'<span class="ic" style="color:var(--accent2)">△</span>';
   el.innerHTML=`
   <div class="card">
     <h2>保険の見直しサマリー</h2>
-    <p class="hint">「死亡」「病気・入院」「働けなくなったら」の試算をまとめて、保障の過不足を一覧にしました。⚠＝不足、◎＝充足、△＝払いすぎ（見直し余地）の可能性です。</p>
-    ${items.map(x=>`<div class="diag-item"><div class="h">${ic(x.st)}<span class="k">${x.k}</span></div><div class="msg">${x.msg}</div></div>`).join("")}
-    <div class="diag-item"><div class="h"><span class="ic" style="color:var(--sub)">¥</span><span class="k">年間保険料の合計</span></div><div class="msg"><b>${prem.toFixed(1)}万円/年</b>（保険タブの登録分。30年続けると約 ${MAN(prem*30)}万円）</div></div>
+    <p class="hint">「死亡」「病気・入院」「働けなくなったら」の試算をまとめて、保障の過不足を一覧にしました。⚠＝不足、◎＝充足、△＝払いすぎ（見直し余地）の可能性です。${cand?"「🔎検討中」は保険タブで検討中にした保険を追加した場合の変化です。":""}</p>
+    ${items.map(x=>`<div class="diag-item"><div class="h">${ic(x.st)}<span class="k">${x.k}</span></div><div class="msg">${x.msg}</div>${x.add?`<div class="msg" style="color:var(--accent)">🔎 ${x.add}</div>`:""}</div>`).join("")}
+    <div class="diag-item"><div class="h"><span class="ic" style="color:var(--sub)">¥</span><span class="k">年間保険料の合計</span></div><div class="msg"><b>${prem.toFixed(1)}万円/年</b>（加入中の分。30年続けると約 ${MAN(prem*30)}万円）${cand?`<br>🔎 検討中を加えると <b>${insPremiumNow(true).toFixed(1)}万円/年</b>（+${candidatePremium().toFixed(1)}万円）`:""}</div></div>
     <p class="mini" style="margin-top:10px">この一覧はアプリ内の概算によるものです。実際の契約・受給額は保険会社・年金事務所にご確認ください。保険の登録・変更は「前提の入力 → 保険」から。</p>
   </div>`;
 }
@@ -3100,6 +3442,130 @@ document.getElementById("resetBtn").onclick=()=>{
 
 }
 
+/* ================= 使い方ガイド（チャット・ルールベース・オフライン） ================= */
+const GUIDE_CATS=[["kakeibo","家計簿の使い方"],["plan","ライフプランの前提"],["risk","保険・もしもの備え"],["data","データ・バックアップ"]];
+const GUIDE_FAQS=[
+  {cat:"kakeibo",q:"固定費・定期収入を設定したい",kw:["固定費","家賃","定期収入","給与","毎月自動"],a:"家賃・通信費・給与など毎月決まって発生するものは「家計簿→管理」の固定費・定期収入から登録すると、自動で記録されます。",jump:()=>{MODE="kakeibo";kCur="kmanage";}},
+  {cat:"kakeibo",q:"カテゴリ別の予算を設定したい",kw:["予算","目標","カテゴリ","食費","上限額"],a:"カテゴリごとの目標額は「家計簿→管理→カテゴリ管理」で設定します。設定した金額の合計が「予算」タブの今月の目標になります。",jump:()=>{MODE="kakeibo";kCur="kmanage";}},
+  {cat:"kakeibo",q:"クレジットカードの明細を取り込みたい",kw:["csv","明細","カード","銀行","取込","インポート"],a:"「家計簿→管理」の一番上「明細CSV取り込み」から、カード・銀行サイトでダウンロードしたCSVをまとめて取り込めます（列や文字コードは自動判定）。",jump:()=>{MODE="kakeibo";kCur="kmanage";}},
+  {cat:"kakeibo",q:"カレンダーや収支のグラフを見たい",kw:["カレンダー","円グラフ","推移","グラフ","収支","貯金額"],a:"「家計簿→ホーム」でカレンダー・予算・収支（円グラフ）・推移（棒グラフ）が見られます。",jump:()=>{MODE="kakeibo";kCur="khome";}},
+  {cat:"plan",q:"かんたん設定ガイドを使いたい",kw:["ガイド","初期設定","わからない","会話形式","質問に答える"],a:"質問に答えるだけで前提を作成できます。今すぐ開きます。",jump:()=>wzOpen()},
+  {cat:"plan",q:"家族の設定をしたい",kw:["家族","子供","配偶者","生まれ年","寿命"],a:"「ライフプラン→前提の入力→家族・基本」で、家族の生年や続柄を設定します。",jump:()=>{MODE="lifeplan";pCur="plan";planSub="family";}},
+  {cat:"plan",q:"年金の繰上げ・繰下げを試したい",kw:["年金","繰上げ","繰下げ","受給開始"],a:"「ライフプラン→前提の入力→収入」で年金の受給開始年齢を変更できます。65歳基準で繰上げ-0.4%/月、繰下げ+0.7%/月が自動反映されます。",jump:()=>{MODE="lifeplan";pCur="plan";planSub="income";}},
+  {cat:"plan",q:"生活費・住宅費・教育費を設定したい",kw:["生活費","住宅費","教育費","家賃","進路"],a:"「ライフプラン→前提の入力→支出」で設定します。教育費は子ごとに進路を選ぶと自動計算されます。",jump:()=>{MODE="lifeplan";pCur="plan";planSub="expense";}},
+  {cat:"plan",q:"住宅ローンの繰上返済を試したい",kw:["住宅ローン","繰上返済","金利","段階金利","借り換え"],a:"「ライフプラン→前提の入力→支出→住宅費」で、繰上返済や金利の変更（変動金利の上昇シナリオ）を設定できます。",jump:()=>{MODE="lifeplan";pCur="plan";planSub="expense";}},
+  {cat:"plan",q:"電化製品の買い替え費用を設定したい",kw:["電化製品","冷蔵庫","洗濯機","家電","買い替え","耐用年数"],a:"「ライフプラン→前提の入力→支出→電化製品の買い替え」で、購入年・金額・耐用年数を登録すると、寿命が来るたびに自動で支出計上されます。",jump:()=>{MODE="lifeplan";pCur="plan";planSub="expense";}},
+  {cat:"plan",q:"資産・積立・取り崩しを設定したい",kw:["資産","積立","取り崩し","nisa","投資","利回り","インフレ"],a:"「ライフプラン→前提の入力→資産」で、現金・投資それぞれの利回り、毎月の積立額、取り崩し開始年齢を設定できます。物価上昇率もここで設定します。",jump:()=>{MODE="lifeplan";pCur="plan";planSub="assets";}},
+  {cat:"plan",q:"予実（実績との比較）を見たい",kw:["予実","実績","計画","差額","比較"],a:"「ライフプラン→予実」で、プランの月次想定と家計簿の実績を比較できます。差が大きい項目は⚠で表示されます。",jump:()=>{MODE="lifeplan";pCur="yojitsu";}},
+  {cat:"plan",q:"キャッシュフロー表やグラフ、年表を見たい",kw:["キャッシュフロー表","グラフ","年表","cf表"],a:"「ライフプラン→分析」で、CF表・資産推移グラフ・ライフイベント年表が見られます。",jump:()=>{MODE="lifeplan";pCur="analysis";anaSub="cf";}},
+  {cat:"plan",q:"診断ランクの意味を知りたい",kw:["診断","ランク","評価","aランク"],a:"サマリー上部の診断は、生涯資金・緊急予備資金・貯蓄率など7項目をルールベースで自動判定したものです。「詳しく見る」で内訳と改善アドバイスが見られます。",jump:()=>{MODE="lifeplan";pCur="home";setOpen("diag",true);}},
+  {cat:"plan",q:"プランを保存して比較・複製したい",kw:["シナリオ","比較","複製","プラン保存","切り替え"],a:"「ライフプラン→シナリオ」で前提を名前付きで保存し、切り替えながら比較できます。「複製」で一部だけ変えたコピーを作って見比べることもできます。",jump:()=>{MODE="lifeplan";pCur="scenario";}},
+  {cat:"plan",q:"印刷・PDF保存をしたい",kw:["印刷","pdf","保存","出力"],a:"「ライフプラン→分析→印刷」から、ナビ等を省いた印刷用レイアウトでPDF保存・印刷ができます。",jump:()=>{MODE="lifeplan";pCur="analysis";anaSub="cf";}},
+  {cat:"risk",q:"保険を登録したい",kw:["保険","死亡保険","医療保険","がん保険","就業不能保険","学資"],a:"「ライフプラン→前提の入力→保険」で、死亡・医療・がん・就業不能・個人年金/学資を登録できます。保険料は自動でキャッシュフローに反映されます。",jump:()=>{MODE="lifeplan";pCur="plan";planSub="insurance";}},
+  {cat:"risk",q:"万一（死亡）のときの遺族の生活を試算したい",kw:["万一","死亡","遺族","遺族年金","団信"],a:"「ライフプラン→分析→もしもの備え→死亡（遺族）」で、遺族年金や死亡保険金を反映した試算ができます。",jump:()=>{MODE="lifeplan";pCur="analysis";anaSub="emg";emgMode="death";}},
+  {cat:"risk",q:"入院・病気になったときの負担を知りたい",kw:["入院","病気","手術","がん治療","高額療養費","医療費"],a:"「ライフプラン→分析→もしもの備え→病気・入院」で、高額療養費制度・傷病手当金・医療保険を反映した自己負担の目安が分かります。",jump:()=>{MODE="lifeplan";pCur="analysis";anaSub="emg";emgMode="sick";}},
+  {cat:"risk",q:"働けなくなったときの備えを知りたい",kw:["就業不能","働けない","休職","障害年金","傷病手当金"],a:"「ライフプラン→分析→もしもの備え→働けなくなったら」で、傷病手当金・障害年金・就業不能保険を反映した資産推移が見られます。",jump:()=>{MODE="lifeplan";pCur="analysis";anaSub="emg";emgMode="disable";}},
+  {cat:"risk",q:"保険が足りているか見直したい",kw:["保険の見直し","過不足","保険料合計","入りすぎ"],a:"「ライフプラン→分析→もしもの備え→保険の見直し」で、死亡・医療・就業不能の保障が足りているかを一覧で確認できます。",jump:()=>{MODE="lifeplan";pCur="analysis";anaSub="emg";emgMode="summary";}},
+  {cat:"data",q:"スマホとPCでデータを同期したい",kw:["同期","supabase","スマホ","複数端末","ログイン"],a:"⚙設定の「データ同期」からSupabaseに接続し、ログインすると端末間で自動同期されます。手順はREADME.mdをご覧ください。",jump:()=>{settingsOpen=true;}},
+  {cat:"data",q:"バックアップを取りたい",kw:["バックアップ","エクスポート","インポート","初期化"],a:"⚙設定の「バックアップ」から、全データをJSONファイルに書き出し・読み込みできます。",jump:()=>{settingsOpen=true;}}
+];
+let chatLog=[];
+function chatEnsureDom(){
+  if(document.getElementById("chatFab")) return;
+  const fab=document.createElement("button");
+  fab.id="chatFab"; fab.className="chatFab"; fab.title="使い方ガイド"; fab.textContent="💬";
+  fab.onclick=chatToggle;
+  document.body.appendChild(fab);
+  const panel=document.createElement("div");
+  panel.id="chatPanel"; panel.className="chatPanel"; panel.style.display="none";
+  panel.innerHTML=`<div class="chathead"><span>💬 使い方ガイド</span><button class="x" id="chatClose">×</button></div>
+    <div class="chatlog" id="chatLog"></div>
+    <div class="chatin"><input type="text" id="chatText" placeholder="知りたいことを入力（例：固定費の設定方法）"><button class="btn sm" id="chatSend">送信</button></div>`;
+  document.body.appendChild(panel);
+  document.getElementById("chatClose").onclick=()=>{ panel.style.display="none"; };
+  document.getElementById("chatSend").onclick=chatSend;
+  document.getElementById("chatText").onkeydown=e=>{ if(e.key==="Enter") chatSend(); };
+  chatGreet();
+}
+function chatToggle(){
+  chatEnsureDom();
+  const p=document.getElementById("chatPanel");
+  p.style.display=p.style.display==="none"?"flex":"none";
+  if(p.style.display==="flex"){ const log=document.getElementById("chatLog"); log.scrollTop=log.scrollHeight; document.getElementById("chatText").focus(); }
+}
+function chatBubble(who,html){
+  const log=document.getElementById("chatLog");
+  const b=document.createElement("div"); b.className="wzb "+who; b.innerHTML=html;
+  log.appendChild(b); log.scrollTop=log.scrollHeight;
+  return b;
+}
+function chatChipRow(items,onPick){
+  const log=document.getElementById("chatLog");
+  const wrap=document.createElement("div"); wrap.className="wzopts";
+  items.forEach(([label,val])=>{ const b=document.createElement("button"); b.textContent=label; b.onclick=()=>onPick(val); wrap.appendChild(b); });
+  log.appendChild(wrap); log.scrollTop=log.scrollHeight;
+  return wrap;
+}
+function chatGreet(){
+  chatBubble("bot","こんにちは。使い方について何でも聞いてください。下のカテゴリから選ぶこともできます。");
+  chatShowCats();
+}
+function chatShowCats(){
+  chatChipRow(GUIDE_CATS.map(([id,label])=>[label,id]),catId=>{
+    chatBubble("me",GUIDE_CATS.find(c=>c[0]===catId)[1]);
+    chatShowFaqs(catId);
+  });
+}
+function chatShowFaqs(catId){
+  const items=GUIDE_FAQS.filter(f=>f.cat===catId).map(f=>[f.q,f]);
+  chatChipRow(items,f=>chatAnswer(f));
+  chatChipRow([["← カテゴリに戻る","__back"]],()=>chatShowCats());
+}
+function chatAnswer(f){
+  chatBubble("me",f.q);
+  const b=chatBubble("bot",f.a);
+  if(f.jump){
+    const btn=document.createElement("button"); btn.className="btn sm"; btn.style.marginTop="8px"; btn.textContent="この画面を開く";
+    btn.onclick=()=>chatJump(f.jump);
+    b.appendChild(document.createElement("br")); b.appendChild(btn);
+  }
+  chatChipRow([["他の質問を見る","__cats"]],()=>chatShowCats());
+}
+function chatJump(fn){
+  fn(); render(); window.scrollTo(0,0);
+  const p=document.getElementById("chatPanel"); if(p) p.style.display="none";
+}
+function chatMatch(text){
+  const t=(text||"").trim();
+  if(!t) return null;
+  let best=null, bestScore=0;
+  GUIDE_FAQS.forEach(f=>{
+    let score=0;
+    f.kw.forEach(k=>{ if(t.includes(k)) score++; });
+    if(t.includes(f.q)) score+=2;
+    if(score>bestScore){ bestScore=score; best=f; }
+  });
+  return bestScore>0?best:null;
+}
+function chatSend(){
+  const inp=document.getElementById("chatText");
+  const text=inp.value.trim(); if(!text) return;
+  inp.value="";
+  chatBubble("me",text.replace(/</g,"&lt;"));
+  const f=chatMatch(text);
+  if(f){
+    const b=chatBubble("bot",f.a);
+    if(f.jump){
+      const btn=document.createElement("button"); btn.className="btn sm"; btn.style.marginTop="8px"; btn.textContent="この画面を開く";
+      btn.onclick=()=>chatJump(f.jump);
+      b.appendChild(document.createElement("br")); b.appendChild(btn);
+    }
+  } else {
+    chatBubble("bot","ごめんなさい、うまく理解できませんでした。下のカテゴリから選んでいただけますか？");
+  }
+  chatShowCats();
+}
+
 // ヘッダー（モード切替・設定）
 document.getElementById("modeK").onclick=()=>{ MODE="kakeibo"; settingsOpen=false; render(); };
 document.getElementById("modeP").onclick=()=>{ MODE="lifeplan"; settingsOpen=false; render(); };
@@ -3109,6 +3575,7 @@ ensureKakeibo();   // 既存ユーザーのデータに家計簿設定を補完
 ensurePlanModel(); // 資産・年金・ローンの新項目を補完（旧データ移行）
 applyFixed();      // 起動時に、当月ぶんまでの固定費を計上
 render();
+chatEnsureDom();   // 使い方ガイド（チャット）のフローティングボタンを設置
 // 初回起動（まっさらな新規ユーザー）だけ、設定ガイドを自動で案内
 const WZKEY="kakeibo_wizard_v1";
 function wizardSeen(){ try{ return !!localStorage.getItem(WZKEY); }catch(e){ return true; } }
