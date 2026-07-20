@@ -192,6 +192,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 <main>
   <section class="tab" data-tab="khome" id="tab-khome"></section>
   <section class="tab" data-tab="kinput" id="tab-kinput"></section>
+  <section class="tab" data-tab="ksave" id="tab-ksave"></section>
   <section class="tab" data-tab="kmanage" id="tab-kmanage"></section>
   <section class="tab" data-tab="home" id="tab-home"></section>
   <section class="tab" data-tab="plan" id="tab-plan"></section>
@@ -203,8 +204,36 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 
 <script>
 "use strict";
-const APP_VERSION = "2026.07.20-3";
+const APP_VERSION = "2026.07.20-8";
 const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
+
+/* ========================================================================
+   ★ 収益化リンクの設定（公開する人が編集する場所）★
+   節約タブの各ボタンに表示するリンクです。
+   ・url に、A8.net・もしもアフィリエイト等で取得したURLを貼るとボタンが有効になります。
+   ・url を "" （空）のままにすると「準備中」と表示され、押せません。
+   ・URLを変えたら index.html を保存して、GitHub に再アップロードすれば全ユーザーに反映されます。
+   ・広告（PR）である旨は画面に自動で表示されます（景品表示法のステマ規制対応）。
+   　例）phone: { label:"格安SIMを比較する", url:"https://px.a8.net/..." }
+   ======================================================================== */
+const SAVE_LINKS={
+  phone:{label:"格安SIMを比較する",url:""},
+  furusato:{label:"ふるさと納税サイトを見る",url:""},
+  denki:{label:"電気・ガスを比較する",url:""},
+  hoken:{label:"保険を無料で見直す",url:""},
+  shoken:{label:"NISA・証券口座を比較する",url:""},
+};
+// アフィリエイトリンクの共通属性（新規タブ・参照元秘匿・広告関係の明示）
+const AFF_REL='noopener noreferrer nofollow sponsored';
+// 収益化リンクのボタンHTML（URL未設定なら「準備中」。設定済みなら PR 表示付きの外部リンク）
+function affLinkHtml(cfg, style){
+  if(!cfg) return "";
+  style=style||"";
+  if(cfg.url) return `<a class="btn ghost sm" href="${cfg.url}" target="_blank" rel="${AFF_REL}" style="${style}">${cfg.label} ↗ <span class="tag" style="font-size:10px;vertical-align:1px">PR</span></a>`;
+  return `<button class="btn ghost sm" disabled style="opacity:.55;${style}">${cfg.label}（準備中）</button>`;
+}
+// 収益化リンクが1つでも設定されているか
+function anyAffLink(){ return Object.values(SAVE_LINKS).some(v=>v&&v.url); }
 const uid = () => Math.random().toString(36).slice(2,9);
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
 
@@ -348,6 +377,8 @@ function ensurePlanModel(){
   if(em.danshin==null) em.danshin=true;
   if(!em.sick||typeof em.sick!=="object") em.sick={days:30,cost:100,extraDaily:0.2,offMonths:1,cancer:false,surgery:true,salaried:true};
   if(!em.dis||typeof em.dis!=="object") em.dis={salaried:true};
+  // 節約のライフプラン反映（節約①の合計を生活費削減として反映／投資に回す）
+  if(!S.savingReflect||typeof S.savingReflect!=="object") S.savingReflect={on:false,annual:0,invest:false,rate:3};
   const l=S.housing&&S.housing.loan;
   if(l){
     if(l.rate2==null){ l.rate2=0; l.rate2From=0; }
@@ -371,6 +402,71 @@ function taxOn(annual){
   return annual*r;
 }
 function pensionTax(annual){ return annual>0 ? annual*0.10 : 0; }
+
+/* ---------- ふるさと納税の控除上限（目安・給与所得者） ---------- */
+// 給与所得控除（円）2020年以降
+function salaryDeduction(income){
+  if(income<=1625000) return 550000;
+  if(income<=1800000) return income*0.4-100000;
+  if(income<=3600000) return income*0.3+80000;
+  if(income<=6600000) return income*0.2+440000;
+  if(income<=8500000) return income*0.1+1100000;
+  return 1950000;
+}
+// 所得税の限界税率
+function incomeTaxMarginal(taxable){
+  if(taxable<=1950000) return 0.05;
+  if(taxable<=3300000) return 0.10;
+  if(taxable<=6950000) return 0.20;
+  if(taxable<=9000000) return 0.23;
+  if(taxable<=18000000) return 0.33;
+  if(taxable<=40000000) return 0.40;
+  return 0.45;
+}
+// 給与収入額面(円)＋家族構成から、ふるさと納税の実質2000円負担で済む上限額(円)を概算
+// opt:{spouse:bool(配偶者控除対象), dep16:高校生相当(16-18)の人数, dep19:大学生相当(19-22)の人数, socialRate}
+function furusatoLimitYen(grossYen, opt){
+  opt=opt||{};
+  if(grossYen<=0) return 0;
+  const kyuyo=salaryDeduction(grossYen);
+  const shotoku=grossYen-kyuyo; // 給与所得
+  const shakai=grossYen*(opt.socialRate!=null?opt.socialRate:0.15); // 社会保険料控除（概算）
+  const dep16=+opt.dep16||0, dep19=+opt.dep19||0, spouse=!!opt.spouse;
+  // 所得税の課税所得と限界税率
+  const taxableIT=Math.max(0, shotoku-shakai-480000-(spouse?380000:0)-dep16*380000-dep19*630000);
+  const itRate=incomeTaxMarginal(taxableIT);
+  // 住民税の所得割（標準10%）
+  const taxableJU=Math.max(0, shotoku-shakai-430000-(spouse?330000:0)-dep16*330000-dep19*450000);
+  const juShotokuwari=taxableJU*0.10;
+  const limit=juShotokuwari*0.2/(0.9-itRate*1.021)+2000;
+  return Math.max(0, Math.round(limit/1000)*1000); // 1000円単位に丸め
+}
+// 指定メンバーの、その年の給与額面合計（万円）
+function grossSalaryAt(memberId, year){
+  const m=member(memberId); if(!m) return 0; const a=ageInYear(m,year);
+  return S.incomes.filter(i=>i.type==="salary"&&i.memberId===memberId).reduce((s,i)=>s+salaryAt(i,a),0);
+}
+// ライフプランの収入・家族構成から、世帯の稼ぎ手ごとのふるさと納税上限を求める
+function furusatoFromPlan(){
+  const y=S.baseYear;
+  const adults=S.members.filter(m=>m.role==="self"||m.role==="spouse");
+  const earnersRaw=adults.map(m=>({m,gross:grossSalaryAt(m.id,y)})).filter(e=>e.gross>0);
+  // 扶養（子16-22）を集計。扶養控除は所得の高い稼ぎ手にまとめて寄せる
+  let dep16=0, dep19=0;
+  S.members.filter(m=>m.role==="child").forEach(c=>{ const a=y-c.birthYear; if(a>=16&&a<=18)dep16++; else if(a>=19&&a<=22)dep19++; });
+  let hi=null; earnersRaw.forEach(e=>{ if(!hi||e.gross>hi.gross) hi=e; });
+  const earners=earnersRaw.map(e=>{
+    const otherM=adults.find(a=>a.id!==e.m.id);
+    const otherGross=otherM?grossSalaryAt(otherM.id,y):0;
+    const spouseControl=!!otherM && otherGross<=103; // 相手の給与が103万以下＝配偶者控除の対象
+    const takeDep=(e===hi);
+    const d16=takeDep?dep16:0, d19=takeDep?dep19:0;
+    const limit=furusatoLimitYen(e.gross*10000,{spouse:spouseControl,dep16:d16,dep19:d19});
+    return {name:e.m.name, role:e.m.role, grossMan:e.gross, spouseControl, dep16:d16, dep19:d19, limit};
+  });
+  const total=earners.reduce((s,e)=>s+e.limit,0);
+  return {earners, total, dep16, dep19, hasSpouse:adults.length>1};
+}
 
 /* ---------- 給与カーブ補間 ---------- */
 function salaryAt(inc, age){
@@ -501,6 +597,10 @@ function computeCF(opt){
   let cash=cashAssets.reduce((s,a)=>s+(+a.balance||0),0);
   const cashRate=(cashAssets.length?(+cashAssets[0].rate||0):0)/100;
   const startNet=cash+iv.reduce((s,x)=>s+x.bal,0);
+  // 節約の反映：opt.saving 優先、なければプランに焼き込まれた S.savingReflect
+  const saveOpt=(opt&&opt.saving)||((S.savingReflect&&S.savingReflect.on)?S.savingReflect:null);
+  const saveRate=saveOpt?(+saveOpt.rate||0)/100/12:0;
+  let svBal=0; // 節約分を投資に回した場合の積立残高
 
   for(let year=S.baseYear; year<=endYear; year++){
     const primAge=ageInYear(prim,year);
@@ -612,8 +712,10 @@ function computeCF(opt){
       if(by>0 && year>by && (year-by)%ly===0) appliance+=(+ap.price||0)*f;
     });
     const tax=taxOn(taxableEarned)+pensionTax(taxablePension);
+    // 節約分（生活費削減・インフレ連動）。死亡年以降の遺族生活費削減とは二重に効かせない
+    const saveCut=saveOpt?(+saveOpt.annual||0)*f:0;
 
-    const expenseTotal = living+housing+cat["教育・結婚資金"]+cat["車両費"]+cat["その他・将来の夢"]+appliance+tax+cat["支払保険料"]-deduct;
+    const expenseTotal = living+housing+cat["教育・結婚資金"]+cat["車両費"]+cat["その他・将来の夢"]+appliance+tax+cat["支払保険料"]-deduct-saveCut;
     const balance = incomeTotal-expenseTotal;
 
     // ----- 資産（投資は銘柄ごとに月次で複利・積立・取り崩し）-----
@@ -639,7 +741,13 @@ function computeCF(opt){
         if(take>0){ x.bal-=take; cash+=take; withdraw+=take; if(x.bal<=0.0005&&x.depleteYear==null) x.depleteYear=year; }
       }
     }
-    const invest=iv.reduce((s,x)=>s+x.bal,0);
+    // 節約分を投資に回す場合：浮いた現金を積立に移し、月次で複利運用（現金がある範囲だけ）
+    if(saveOpt&&saveOpt.invest&&saveCut>0){
+      const move=Math.max(0,Math.min(saveCut,cash));
+      for(let m=0;m<12;m++){ svBal*=(1+saveRate); svBal+=move/12; }
+      cash-=move; // 現金から投資へ振替（生活費削減で浮いた分）
+    }
+    const invest=iv.reduce((s,x)=>s+x.bal,0)+svBal;
     const netWorth=cash+invest;
 
     rows.push({
@@ -647,6 +755,7 @@ function computeCF(opt){
       salary,pension,retire,other,incomeTotal,
       living, housing, education:cat["教育・結婚資金"], car:cat["車両費"],
       other_exp:cat["その他・将来の夢"], appliance, tax, insurance:cat["支払保険料"], deduct, survivorPen, disBen,
+      saving:saveCut, svBal,
       expenseTotal, balance, contrib, withdraw, cash, invest, netWorth
     });
   }
@@ -663,7 +772,7 @@ let kHomeSub=UI.kHomeSub||"cal";
 // 旧構成（4タブ）からの移行
 if(kCur==="kcal"){ kCur="khome"; kHomeSub="cal"; }
 if(kCur==="kbudget"){ kCur="khome"; kHomeSub="budget"; }
-if(!["khome","kinput","kmanage"].includes(kCur)) kCur="khome";
+if(!["khome","kinput","ksave","kmanage"].includes(kCur)) kCur="khome";
 let tMetric=UI.tMetric||"savings", tMode=UI.tMode||"month", tFrom=UI.tFrom||"", tTo=UI.tTo||"";
 let settingsOpen=false;
 let anaSub=UI.anaSub||"cf", yMonth=UI.yMonth||todayStr().slice(0,7);
@@ -693,7 +802,7 @@ function emgOptFor(scen, includeCandidate){
   }
   return includeCandidate?cand:undefined;
 }
-const KTABS=[["khome","ホーム"],["kinput","入力"],["kmanage","管理"]];
+const KTABS=[["khome","ホーム"],["kinput","入力"],["ksave","節約"],["kmanage","管理"]];
 const PTABS=[["home","サマリー"],["plan","前提の入力"],["yojitsu","予実"],["analysis","分析"],["scenario","シナリオ"]];
 function curTab(){ return settingsOpen?"settings":(MODE==="kakeibo"?kCur:pCur); }
 function render(){
@@ -705,6 +814,7 @@ function render(){
   const cur=curTab();
   if(cur==="khome") renderKHome();
   if(cur==="kinput") renderKInput();
+  if(cur==="ksave") renderKSave();
   if(cur==="kmanage") renderKManage();
   if(cur==="home") renderHome();
   if(cur==="plan") renderPlan();
@@ -1218,8 +1328,19 @@ function renderFamily(){
 /* ---------- 収入 ---------- */
 function renderIncome(){
   const el=document.getElementById("planBody");
+  // 手取りの目安（現在・額面→税社保控除後）
+  const y=S.baseYear;
+  const salMembers=[...new Set(S.incomes.filter(i=>i.type==="salary").map(i=>i.memberId))];
+  const netRows=salMembers.map(mid=>{ const g=grossSalaryAt(mid,y); return {name:(member(mid)||{}).name||"", g, t:taxOn(g)}; }).filter(r=>r.g>0);
+  const netBox=netRows.length?`
+    <div style="background:var(--pos-bg,rgba(79,179,154,.10));border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px">
+      <div style="font-size:13px;color:var(--sub);margin-bottom:4px">💡 入力は「額面（税込）」です。税金・社会保険料はCFで自動的に差し引かれます。</div>
+      ${netRows.map(r=>`<div style="font-size:14px">${r.name}：額面 <b>${MAN(r.g)}万</b> → 手取り 約 <b style="color:var(--pos)">${MAN(r.g-r.t)}万</b> <span class="mini">（税・社保 約${MAN(r.t)}万を自動控除）</span></div>`).join("")}
+      <div class="mini" style="margin-top:4px;color:var(--sub)">※ 年収帯ごとの実効負担率による概算です。キャッシュフロー表・グラフはこの手取りベースで計算されています。</div>
+    </div>`:"";
   el.innerHTML=`<div class="card"><h2>収入</h2>
-    <p class="hint">給与は「年齢と年収の折れ線」で入力します（間の年は自動で補間）。年金・退職金・その他収入も追加できます。</p>
+    <p class="hint">給与は「年齢と<b>額面</b>年収（税・社保引き前）の折れ線」で入力します（間の年は自動で補間）。年金・退職金・その他収入も追加できます。</p>
+    ${netBox}
     <div id="incList"></div>
     <div style="margin-top:6px">
       <button class="btn ghost sm" data-add="salary">+ 給与</button>
@@ -1246,7 +1367,7 @@ function incomeCard(inc){
   const TL={salary:"給与",pension:"年金",retire:"退職金",other:"その他収入"};
   let body="";
   if(inc.type==="salary"){
-    body=`<div class="mini" style="margin:6px 0 4px">年齢と年収(万円)の折れ線 ＋ 就業終了年齢</div><div id="pts_${inc.id}"></div>
+    body=`<div class="mini" style="margin:6px 0 4px">年齢と額面年収(万円・税込)の折れ線 ＋ 就業終了年齢</div><div id="pts_${inc.id}"></div>
       <button class="btn ghost sm" data-pt>+ 点を追加</button>
       <div style="margin-top:8px;max-width:160px"><label class="f">就業終了年齢</label><input type="number" data-k="endAge" value="${inc.endAge}"></div>`;
   } else if(inc.type==="pension"){
@@ -1274,7 +1395,7 @@ function incomeCard(inc){
     const pc=d.querySelector(`#pts_${inc.id}`);
     inc.points.forEach(pt=>{
       const r=document.createElement("div"); r.className="seg";
-      r.innerHTML=`<span class="mini">年齢</span><input type="number" value="${pt.age}" data-p="age"><span class="mini">→ 年収</span><input type="number" value="${pt.annual}" data-p="annual"><button class="btn danger sm">×</button>`;
+      r.innerHTML=`<span class="mini">年齢</span><input type="number" value="${pt.age}" data-p="age"><span class="mini">→ 額面</span><input type="number" value="${pt.annual}" data-p="annual"><button class="btn danger sm">×</button>`;
       r.querySelectorAll("[data-p]").forEach(inp=>inp.onchange=e=>{pt[inp.dataset.p]=+e.target.value;commit();});
       r.querySelector(".danger").onclick=()=>{inc.points=inc.points.filter(x=>x!==pt);commit();};
       pc.appendChild(r);
@@ -2439,7 +2560,7 @@ function renderEmgSummary(){
 /* ========== 家計簿（実績）データ ========== */
 const EKEY="kakeibo_entries_v1", CKEY="kakeibo_config_v1";
 // living=true のカテゴリがライフプランの「生活費」と対応する
-const DEF_EXP=[["食費",1],["水道・光熱費",1],["家具・日用雑貨",1],["被服費",1],["医療費",1],["通信・交通費",1],["教養・娯楽費",1],["こづかい",1],["交際費",1],["その他雑費",1],["住宅",0],["車両",0],["教育",0],["保険",0],["投資・貯蓄",0],["特別支出",0]];
+const DEF_EXP=[["食費",1],["水道・光熱費",1],["家具・日用雑貨",1],["被服費",1],["医療費",1],["スマホ代",1],["サブスク",1],["通信・交通費",1],["教養・娯楽費",1],["こづかい",1],["交際費",1],["その他雑費",1],["住宅",0],["車両",0],["教育",0],["保険",0],["投資・貯蓄",0],["特別支出",0]];
 const INVEST_CAT="投資・貯蓄";
 const DEF_INC=["給与","賞与","児童手当","その他"];
 function ensureKakeibo(){
@@ -2458,6 +2579,19 @@ function ensureKakeibo(){
     const item={name:INVEST_CAT,living:false};
     if(i>=0) k.cats.expense.splice(i,0,item); else k.cats.expense.push(item);
   }
+  // 「スマホ代」「サブスク」を既存ユーザーにも補完（投資・貯蓄の直前に・生活費扱い）
+  [["スマホ代",true],["サブスク",true]].forEach(([nm,lv])=>{
+    if(!k.cats.expense.some(c=>c.name===nm)){
+      const i=k.cats.expense.findIndex(c=>c.name===INVEST_CAT);
+      const item={name:nm,living:lv};
+      if(i>=0) k.cats.expense.splice(i,0,item); else k.cats.expense.push(item);
+    }
+  });
+  // 節約シミュレーターの状態
+  if(!k.savings||typeof k.savings!=="object") k.savings={items:[]};
+  if(!Array.isArray(k.savings.items)) k.savings.items=[];
+  if(k.savings.mode!=="invest"&&k.savings.mode!=="save") k.savings.mode="save";
+  if(k.savings.rate==null) k.savings.rate=3;
 }
 function expCats(){ return S.kakeibo.cats.expense.map(c=>c.name); }
 function incCats(){ return S.kakeibo.cats.income.map(c=>c.name); }
@@ -2873,6 +3007,249 @@ function renderKTrend(){
   const tf=document.getElementById("tFromIn"), tt=document.getElementById("tToIn");
   if(tf) tf.onchange=e=>{ tFrom=e.target.value; render(); };
   if(tt) tt.onchange=e=>{ tTo=e.target.value; render(); };
+}
+
+/* --- 画面3: 節約シミュレーター --- */
+// サブスク・スマホ代の検出キーワード（店名・メモ・カテゴリを小文字化して部分一致）
+const SUBSC_KW=["netflix","ネットフリックス","ネトフリ","spotify","スポティファイ","youtube premium","youtube","ユーチューブ","hulu","フール","disney","ディズニー","dアニメ","amazon prime","アマゾンプライム","prime video","プライム","kindle","キンドル","apple","icloud","itunes","app store","adobe","アドビ","microsoft 365","office 365","dazn","ダゾーン","abema","u-next","unext","paravi","dmm","fanza","audible","オーディブル","chatgpt","openai","claude","midjourney","canva","notion","cursor","github","dropbox","evernote","1password","nintendo","ニンテンドー","switch online","playstation","ps plus","xbox","apple music","line music","youtube music","amazon music","エニタイム","anytime","ジム","フィットネス","fitness","chocozap","ちょこざっぷ","楽天マガジン","dマガジン","weekly","monthly","月額","サブスク","定額"];
+const PHONE_KW=["docomo","ドコモ","ahamo","アハモ","au","kddi","softbank","ソフトバンク","楽天モバイル","rakuten mobile","povo","ポヴォ","linemo","ラインモ","ワイモバイル","y!mobile","ymobile","uqモバイル","uq mobile","uq","mineo","マイネオ","iijmio","ocn","biglobe","nuroモバイル","日本通信","携帯","スマホ","携帯電話","通信料","キャリア"];
+// 格安SIMの目安プラン（円/月・すべて編集可能）
+const SIM_PLANS=[["3GB プラン（最安級）",1078],["20GB プラン",2178],["無制限プラン",3278]];
+// SAVE_LINKS はファイル冒頭（APP_VERSION の下）で設定します。
+function svKwMatch(text,kw){ const t=(text||"").toLowerCase(); return kw.some(k=>t.includes(k.toLowerCase())); }
+// 家計簿（固定費＋直近3ヶ月の明細）からサブスク・スマホ代を検出
+function detectSavings(){
+  const res={subsc:[],phone:[]}; const seen=new Set();
+  const push=(bucket,name,monthly)=>{ name=(name||"").trim()||(bucket==="phone"?"スマホ代":"サブスク"); const key=bucket+":"+name.toLowerCase(); if(seen.has(key))return; seen.add(key); res[bucket].push({name,monthly:Math.max(0,Math.round(monthly))}); };
+  // 固定費（支出・有効なもの）
+  (S.kakeibo.fixed||[]).forEach(f=>{
+    if(f.kind!=="expense"||!f.active) return;
+    const monthly=(+f.amount||0)/Math.max(1,+f.everyMonths||1);
+    const label=(f.name||"")+" "+(f.category||"");
+    if(svKwMatch(label,PHONE_KW)) push("phone",f.name,monthly);
+    else if(svKwMatch(label,SUBSC_KW)) push("subsc",f.name,monthly);
+  });
+  // 明細（直近3ヶ月・支出）→ 名称ごとに月平均
+  const now=new Date(); const cut=new Date(now.getFullYear(),now.getMonth()-2,1);
+  const cutStr=cut.getFullYear()+"-"+String(cut.getMonth()+1).padStart(2,"0")+"-01";
+  const agg={};
+  E.forEach(x=>{
+    if(x.deleted||x.kind!=="expense"||!x.date||x.date<cutStr) return;
+    const text=(x.memo||"")+" "+(x.category||"");
+    let bucket=null;
+    if(svKwMatch(text,PHONE_KW)) bucket="phone";
+    else if(svKwMatch(text,SUBSC_KW)) bucket="subsc";
+    if(!bucket) return;
+    const name=((x.memo||"").trim()||(x.category||"").trim());
+    const key=bucket+":"+name.toLowerCase();
+    (agg[key]||(agg[key]={bucket,name,sum:0}));
+    agg[key].sum+=x.amount;
+  });
+  Object.values(agg).forEach(a=>push(a.bucket,a.name,a.sum/3));
+  return res;
+}
+// 節約項目の「節約後の月額（円）」
+function saveAfter(it){
+  if(it.kind==="cancel") return 0;
+  if(it.kind==="reduce") return Math.round((+it.cur||0)*(1-(Math.min(100,Math.max(0,+it.reducePct||0)))/100));
+  return Math.max(0,+it.after||0); // switch / custom
+}
+function itemMonthlySave(it){ return Math.max(0,(+it.cur||0)-saveAfter(it)); }
+// 年間◯円を毎年 rate で積み立てた将来価値（円）
+function svCompound(annual,years,rate){ let v=0; for(let i=0;i<years;i++){ v=(v+annual)*(1+rate); } return v; }
+const SV_METHODS=[["cancel","解約する（月額0に）"],["switch","乗り換える（格安SIMなど）"],["reduce","割合で減らす（％）"],["custom","節約後の金額を入力"]];
+function svAddItem(kind){
+  const sv=S.kakeibo.savings;
+  const base={id:uid(),name:"",cur:0,after:0,reducePct:0,linkKey:null,on:true};
+  if(kind==="subsc") Object.assign(base,{name:"サブスク",kind:"cancel",cur:1000});
+  else if(kind==="phone") Object.assign(base,{name:"スマホ代",kind:"switch",cur:8000,after:SIM_PLANS[1][1],linkKey:"phone"});
+  else if(kind==="utility") Object.assign(base,{name:"電気・ガス",kind:"reduce",cur:15000,reducePct:8,linkKey:"denki"});
+  else Object.assign(base,{name:"節約したい項目",kind:"custom",cur:0,after:0});
+  sv.items.push(base); commit();
+}
+function renderKSave(){
+  const el=document.getElementById("tab-ksave"); ensureKakeibo();
+  const sv=S.kakeibo.savings;
+  const det=detectSavings();
+  const inList=nm=>sv.items.some(it=>(it.name||"").trim().toLowerCase()===(nm||"").trim().toLowerCase());
+  const detItems=[...det.phone.map(d=>({...d,bucket:"phone"})),...det.subsc.map(d=>({...d,bucket:"subsc"}))].filter(d=>!inList(d.name));
+  let mSave=0; sv.items.forEach(it=>{ if(it.on) mSave+=itemMonthlySave(it); });
+  const ySave=mSave*12;
+  // 積立効果（年3%想定）
+  const proj=y=>Math.round(svCompound(ySave,y,0.03)/10000);
+  // ふるさと納税（ライフプランの収入・家族構成から稼ぎ手ごとに上限を概算）
+  const fs=furusatoFromPlan();
+  const fsEarners=fs.earners.filter(e=>e.limit>0);
+  const fsTotal=fsEarners.reduce((s,e)=>s+e.limit,0);
+  const fsReturn=Math.max(0,Math.round(fsTotal*0.3/100)*100); // 返礼品の目安（上限の約3割・100円単位）
+  const fsFamily=[fs.dep16?`高校生${fs.dep16}人`:"", fs.dep19?`大学生${fs.dep19}人`:""].filter(Boolean).join("・")||"扶養なし";
+  el.innerHTML=`
+  <div class="card">
+    <h2>💰 節約シミュレーター</h2>
+    <p class="hint">サブスクの解約やスマホ代の見直しで「年間いくら浮くか」を試算します。各項目のチェックを外すと計算から外せます。金額はすべて円/月です。</p>
+    <div style="background:var(--pos-bg,rgba(79,179,154,.12));border:1px solid var(--pos);border-radius:12px;padding:14px 16px;margin-top:4px">
+      <div style="font-size:13px;color:var(--sub)">チェックした節約の合計</div>
+      <div style="font-size:15px;margin-top:2px">月 <b style="font-size:20px">${YEN(mSave)}</b> 円 節約 →
+        <b style="font-size:22px;color:var(--pos)">年間 ${(ySave/10000).toFixed(1)} 万円</b></div>
+      ${ySave>0?`<div class="mini" style="margin-top:8px">この年 ${(ySave/10000).toFixed(1)}万円を投資に回して積み立てると（年3%想定）…
+        10年で約 <b>${proj(10)}万円</b>／20年で約 <b>${proj(20)}万円</b>／30年で約 <b>${proj(30)}万円</b></div>`:""}
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🎁 ふるさと納税</h2>
+    <p class="hint">ライフプランに入れた収入と家族構成から、実質2,000円の負担で寄付できる上限額（目安）を計算します。返礼品を受け取れる分、実質的な家計の節約になります。ふるさと納税は<b>ひとりずつ</b>行うので、共働きなら世帯で合算できます。</p>
+    ${fsEarners.length?`
+    <div style="background:var(--pos-bg,rgba(79,179,154,.12));border:1px solid var(--pos);border-radius:12px;padding:14px 16px">
+      ${fsEarners.map(e=>`<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px${fsEarners.length>1?";padding:3px 0":""}">
+          <span style="font-size:14px">${e.name}さん <span class="mini">（額面${MAN(e.grossMan)}万${e.spouseControl?"・配偶者控除":""}${e.dep16||e.dep19?"・扶養"+(e.dep16+e.dep19)+"人":""}）</span></span>
+          <span style="font-size:15px">年 <b style="font-size:18px;color:var(--pos)">${YEN(e.limit)}</b> 円</span></div>`).join("")}
+      ${fsEarners.length>1?`<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;border-top:1px solid var(--pos);margin-top:6px;padding-top:6px">
+          <span style="font-size:14px"><b>世帯の合計</b></span>
+          <span style="font-size:15px">年 <b style="font-size:22px;color:var(--pos)">${YEN(fsTotal)}</b> 円まで</span></div>`:""}
+      <div class="mini" style="margin-top:8px">実質 <b>2,000円${fsEarners.length>1?"×"+fsEarners.length+"人":""}</b> の負担で、約 <b>${YEN(fsReturn)}円</b> 分の返礼品（上限の約3割）が受け取れます。<br>
+        差し引き、実質 <b style="color:var(--pos)">約 ${YEN(Math.max(0,fsReturn-2000*fsEarners.length))}円</b> おトクの目安です。</div>
+    </div>
+    <p class="mini" style="margin-top:8px;color:var(--sub)">前提：${fsEarners.length>1?"共働き（それぞれの名義で寄付）":"扶養控除は所得の高い方に合算"}／${fsFamily}（ライフプランの収入・家族から自動）。</p>
+    <details style="margin-top:6px"><summary class="mini">計算の前提と注意</summary>
+      <p class="mini" style="margin-top:6px">給与所得者を前提に、給与所得控除・社会保険料（額面の約15%概算）・基礎控除・配偶者控除・扶養控除（高校生=16〜18歳／大学生=19〜22歳。扶養は所得の高い方に寄せて計算）から住民税所得割を求め、上限＝所得割×20%÷(90%−所得税率×1.021)+2,000円 で概算しています。ふるさと納税は各自の名義で行うため、共働きは合算できます。<b>医療費控除・住宅ローン控除・iDeCoなど他の控除があると上限は下がります</b>。正確な金額は各ふるさと納税サイトのシミュレーターや、お住まいの自治体でご確認ください。</p>
+    </details>
+    ${affLinkHtml(SAVE_LINKS.furusato,"margin-top:8px")}
+    `:`<p class="mini">ライフプランに給与収入が入力されていないため計算できません。「ライフプラン → 前提の入力 → 収入」で額面年収を入れると、ここに上限額が表示されます。</p>`}
+  </div>
+
+  <div class="card">
+    <h2>🔍 家計簿から自動で見つける</h2>
+    <p class="hint">固定費と直近3ヶ月の明細から、サブスク・スマホ代らしき支出を探しました。「追加」で下の節約リストに入ります。</p>
+    ${detItems.length?`<div id="svDetList">${detItems.map((d,i)=>`
+      <div class="seg" style="justify-content:space-between;gap:8px">
+        <span><span class="tag">${d.bucket==="phone"?"スマホ":"サブスク"}</span> ${(d.name||"").replace(/</g,"&lt;")}</span>
+        <span style="display:flex;gap:8px;align-items:center">
+          <span class="mini">約 ${YEN(d.monthly)}円/月</span>
+          <button class="btn ghost sm" data-svdet="${i}">＋ 追加</button>
+        </span>
+      </div>`).join("")}</div>`
+    :`<p class="mini">見つかりませんでした。明細のメモに「Netflix」「ドコモ」などサービス名を入れておくと検出しやすくなります。下のボタンから手動でも追加できます。</p>`}
+  </div>
+
+  <div class="card">
+    <h2>節約リスト</h2>
+    <div id="svList">${sv.items.length?"":`<p class="mini">まだありません。上の「追加」か、下のボタンから項目を足してください。</p>`}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn ghost sm addbtn" data-svadd="subsc">＋ サブスク</button>
+      <button class="btn ghost sm addbtn" data-svadd="phone">＋ スマホ代</button>
+      <button class="btn ghost sm addbtn" data-svadd="utility">＋ 電気・ガス</button>
+      <button class="btn ghost sm addbtn" data-svadd="custom">＋ 自由入力</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>📈 ライフプランに反映して比べる</h2>
+    <p class="hint">この節約を続けた場合、生涯の資産がどう変わるかを試算します。浮いたお金を「貯金する」か「投資に回す」かを選べます。</p>
+    ${ySave>0?`
+    <div class="seg2" style="max-width:360px;margin:4px 0 6px">
+      <button data-svmode="save" class="${sv.mode==="save"?"on":""}">貯金に回す</button>
+      <button data-svmode="invest" class="${sv.mode==="invest"?"on":""}">投資に回す</button>
+    </div>
+    ${sv.mode==="invest"?`<div style="max-width:200px;margin-bottom:8px"><label class="f">想定利回り（％/年）</label><input type="number" inputmode="decimal" id="svRate" value="${+sv.rate||3}" step="0.5"></div>`:""}
+    <div id="svCompare"></div>
+    <button class="btn" id="svSaveScen" style="margin-top:12px">この節約プランを「シナリオ」に保存して比較する</button>
+    <p class="mini" style="margin-top:6px">保存すると「ライフプラン → シナリオ」タブに追加され、現状のプランと並べて資産カーブを見比べられます（現在の前提はそのまま残ります）。</p>
+    `:`<p class="mini">上の節約リストにチェックが入ると、ここに「節約しない場合／した場合」の資産推移が表示されます。</p>`}
+  </div>
+
+  <div class="card">
+    <h2>次の一歩（乗り換え先を探す）</h2>
+    <p class="hint">実際に乗り換え・見直しをするときの比較先です。金額はご自身で必ず最新の条件をご確認ください。</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${Object.values(SAVE_LINKS).map(v=>affLinkHtml(v)).join("")}
+    </div>
+    <p class="mini" style="margin-top:8px;color:var(--sub)">※ 上記リンクには広告（PR）を含む場合があります。契約は各社の公式条件をご確認のうえ、ご自身の判断で行ってください。</p>
+  </div>`;
+
+  // 節約リストの各行を描画
+  const list=document.getElementById("svList");
+  sv.items.forEach(it=>{
+    const d=document.createElement("div"); d.className="itemrow"; d.style.display="block";
+    const mm=itemMonthlySave(it);
+    d.innerHTML=`
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+        <label style="display:flex;gap:5px;align-items:center;font-size:13px;color:var(--sub)"><input type="checkbox" data-k="on" ${it.on?"checked":""} style="width:auto"> 節約する</label>
+        <input type="text" data-k="name" value="${(it.name||"").replace(/"/g,"&quot;")}" style="flex:1;min-width:120px">
+        <button class="btn danger sm" data-rm>×</button>
+      </div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
+        <div><label class="f">現在（円/月）</label><input type="number" inputmode="numeric" data-k="cur" value="${+it.cur||0}"></div>
+        <div><label class="f">節約の方法</label><select data-k="kind">${SV_METHODS.map(([v,l])=>`<option value="${v}"${it.kind===v?" selected":""}>${l}</option>`).join("")}</select></div>
+        ${it.kind==="switch"?`<div><label class="f">乗り換え先の目安</label><select data-k="simPreset"><option value="">（手入力）</option>${SIM_PLANS.map(([l,v])=>`<option value="${v}"${(+it.after===v)?" selected":""}>${l}（${YEN(v)}円）</option>`).join("")}</select></div>
+        <div><label class="f">節約後（円/月）</label><input type="number" inputmode="numeric" data-k="after" value="${+it.after||0}"></div>`:""}
+        ${it.kind==="reduce"?`<div><label class="f">削減率（％）</label><input type="number" inputmode="numeric" data-k="reducePct" value="${+it.reducePct||0}"></div>
+        <div><label class="f">節約後（自動）</label><input type="number" value="${saveAfter(it)}" disabled style="opacity:.7"></div>`:""}
+        ${it.kind==="custom"?`<div><label class="f">節約後（円/月）</label><input type="number" inputmode="numeric" data-k="after" value="${+it.after||0}"></div>`:""}
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <span class="mini">この項目：<b style="color:${mm>0?"var(--pos)":"var(--sub)"}">${mm>0?"年 "+YEN(mm*12)+"円":"—"}</b>${it.on?"":' <span style="color:var(--sub)">（計算から除外中）</span>'}</span>
+        ${it.linkKey&&SAVE_LINKS[it.linkKey]?affLinkHtml(SAVE_LINKS[it.linkKey],"margin-left:auto"):""}
+      </div>`;
+    d.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
+      const k=inp.dataset.k;
+      if(k==="on") it.on=e.target.checked;
+      else if(k==="name") it.name=e.target.value;
+      else if(k==="kind"){ it.kind=e.target.value; if(it.kind==="cancel") it.after=0; }
+      else if(k==="simPreset"){ if(e.target.value!==""){ it.after=+e.target.value; } }
+      else it[k]=+e.target.value;
+      commit();
+    });
+    d.querySelector("[data-rm]").onclick=()=>{ S.kakeibo.savings.items=sv.items.filter(x=>x!==it); commit(); };
+    list.appendChild(d);
+  });
+  // 自動検出→追加
+  document.querySelectorAll("[data-svdet]").forEach(b=>b.onclick=()=>{
+    const d=detItems[+b.dataset.svdet]; if(!d) return;
+    if(d.bucket==="phone") sv.items.push({id:uid(),name:d.name,kind:"switch",cur:d.monthly,after:SIM_PLANS[1][1],reducePct:0,linkKey:"phone",on:true});
+    else sv.items.push({id:uid(),name:d.name,kind:"cancel",cur:d.monthly,after:0,reducePct:0,linkKey:null,on:true});
+    commit();
+  });
+  // 手動追加
+  document.querySelectorAll("[data-svadd]").forEach(b=>b.onclick=()=>svAddItem(b.dataset.svadd));
+
+  // ---- ライフプラン反映（比較グラフ＋シナリオ保存） ----
+  const annualMan=ySave/10000; // 万円/年
+  const cmp=document.getElementById("svCompare");
+  if(cmp&&ySave>0){
+    const base=computeCF({saving:{annual:0}});
+    const after=computeCF({saving:{annual:annualMan,invest:sv.mode==="invest",rate:+sv.rate||3}});
+    const met=o=>{ const rows=o.rows,end=rows[rows.length-1]; const neg=rows.find(r=>r.netWorth<0);
+      return {final:end.netWorth, a65:(rows.find(r=>r.primAge>=65)||end).netWorth, negAge:neg?neg.primAge:null}; };
+    const mb=met(base), ma=met(after);
+    const diffTxt=d=>`<b style="color:${d>=0?"var(--pos)":"var(--neg)"}">${d>=0?"+":"−"}${MAN(Math.abs(d))}万</b>`;
+    cmp.innerHTML=`
+      <div class="chartbox">${scenarioChart(base.rows,[after.rows])}</div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>現状</span><span><i style="background:${catColor(1)}"></i>節約後（${sv.mode==="invest"?"投資":"貯金"}）</span></div>
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+        <div class="kpi"><div class="mini">65歳時点の資産</div><div>${MAN(mb.a65)}万 → <b>${MAN(ma.a65)}万</b></div><div class="mini">${diffTxt(ma.a65-mb.a65)}</div></div>
+        <div class="kpi"><div class="mini">最終資産</div><div>${MAN(mb.final)}万 → <b>${MAN(ma.final)}万</b></div><div class="mini">${diffTxt(ma.final-mb.final)}</div></div>
+      </div>
+      ${(mb.negAge!=null||ma.negAge!=null)?`<p class="mini" style="margin-top:8px">資産が尽きる時期：現状 ${mb.negAge!=null?mb.negAge+"歳":"なし"} → 節約後 ${ma.negAge!=null?ma.negAge+"歳":"なし ✓"}</p>`:""}
+      <p class="mini" style="margin-top:6px">年 ${annualMan.toFixed(1)}万円の節約を今後ずっと続けた場合の試算です。${sv.mode==="invest"?"浮いた分を利回り"+(+sv.rate||3)+"%で運用する前提です。":"浮いた分は預貯金として貯まっていきます。"}</p>`;
+  }
+  document.querySelectorAll("[data-svmode]").forEach(b=>b.onclick=()=>{ sv.mode=b.dataset.svmode; commit(); });
+  const rateInp=document.getElementById("svRate");
+  if(rateInp) rateInp.onchange=e=>{ sv.rate=Math.max(0,+e.target.value||0); commit(); };
+  const saveBtn=document.getElementById("svSaveScen");
+  if(saveBtn) saveBtn.onclick=()=>{
+    if(ySave<=0){ alert("先に節約する項目にチェックを入れてください。"); return; }
+    const name=(prompt("保存する節約プランの名前","節約プラン")||"").trim(); if(!name) return;
+    const bak=JSON.stringify(S.savingReflect||null);
+    S.savingReflect={on:true,annual:annualMan,invest:sv.mode==="invest",rate:+sv.rate||3};
+    const data=planSnapData();
+    try{ S.savingReflect=bak==="null"?{on:false,annual:0,invest:false,rate:3}:JSON.parse(bak); }
+    catch(e){ S.savingReflect={on:false,annual:0,invest:false,rate:3}; }
+    if(!Array.isArray(S.scenarios)) S.scenarios=[];
+    S.scenarios.push({id:uid(),name,savedAt:new Date().toISOString(),data});
+    commit();
+    alert("「ライフプラン → シナリオ」タブに保存しました。現状のプランと並べて比較できます。");
+  };
 }
 
 /* --- 画面4: 管理（CSV・固定費・カテゴリ） --- */
@@ -3296,6 +3673,16 @@ function renderSettings(){
     </div>
   </div>
   <div class="card">
+    <h2>収益化リンクの設定状況（公開する人向け）</h2>
+    <p class="hint">「家計簿→節約」に表示される乗り換え・比較リンクの状態です。設定するには index.html 冒頭の <code>SAVE_LINKS</code> にURLを貼り、GitHubに再アップロードしてください。</p>
+    <div style="display:grid;gap:4px">
+      ${Object.values(SAVE_LINKS).map(v=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:14px">
+        <span>${v.label}</span>
+        <span style="${v.url?"color:var(--pos)":"color:var(--sub)"}">${v.url?"設定済み ✓":"準備中（未設定）"}</span></div>`).join("")}
+    </div>
+    <p class="mini" style="margin-top:8px;color:var(--sub)">${anyAffLink()?"設定済みのリンクには自動で「PR」表示が付きます（ステマ規制対応）。":"すべて未設定のため、節約タブでは「準備中」と表示されます。"}</p>
+  </div>
+  <div class="card">
     <h2>アプリの情報</h2>
     <p class="hint">バージョン: <b>${APP_VERSION}</b>　／　表示中のアドレス: <span class="mini">${location.origin+location.pathname}</span></p>
     <button class="btn ghost sm" id="forceUpd">最新版を確認して更新</button>
@@ -3449,6 +3836,9 @@ const GUIDE_FAQS=[
   {cat:"kakeibo",q:"カテゴリ別の予算を設定したい",kw:["予算","目標","カテゴリ","食費","上限額"],a:"カテゴリごとの目標額は「家計簿→管理→カテゴリ管理」で設定します。設定した金額の合計が「予算」タブの今月の目標になります。",jump:()=>{MODE="kakeibo";kCur="kmanage";}},
   {cat:"kakeibo",q:"クレジットカードの明細を取り込みたい",kw:["csv","明細","カード","銀行","取込","インポート"],a:"「家計簿→管理」の一番上「明細CSV取り込み」から、カード・銀行サイトでダウンロードしたCSVをまとめて取り込めます（列や文字コードは自動判定）。",jump:()=>{MODE="kakeibo";kCur="kmanage";}},
   {cat:"kakeibo",q:"カレンダーや収支のグラフを見たい",kw:["カレンダー","円グラフ","推移","グラフ","収支","貯金額"],a:"「家計簿→ホーム」でカレンダー・予算・収支（円グラフ）・推移（棒グラフ）が見られます。",jump:()=>{MODE="kakeibo";kCur="khome";}},
+  {cat:"kakeibo",q:"節約できるところを見つけたい",kw:["節約","サブスク","スマホ","格安sim","解約","電気","見直し"],a:"「家計簿→節約」で、家計簿からサブスク・スマホ代を自動検出し、解約や格安SIMへの乗り換えで年間いくら浮くかを試算できます。積み立てた場合の将来効果も表示されます。",jump:()=>{MODE="kakeibo";kCur="ksave";}},
+  {cat:"kakeibo",q:"ふるさと納税の上限額を知りたい",kw:["ふるさと納税","上限","控除","限度額","寄付"],a:"「家計簿→節約」の🎁ふるさと納税に、ライフプランの収入・家族構成から実質2,000円で寄付できる上限額の目安が自動表示されます。医療費控除などがあると上限は下がります。",jump:()=>{MODE="kakeibo";kCur="ksave";}},
+  {cat:"plan",q:"入力する年収は額面？手取り？",kw:["年収","額面","手取り","税込","収入","税金"],a:"収入は「額面（税込）」で入力します。税金・社会保険料はキャッシュフロー表・グラフで自動的に差し引かれるので、手取りベースで資産が計算されます。「前提の入力→収入」に額面→手取りの目安も表示されます。",jump:()=>{MODE="lifeplan";pCur="plan";planSub="income";}},
   {cat:"plan",q:"かんたん設定ガイドを使いたい",kw:["ガイド","初期設定","わからない","会話形式","質問に答える"],a:"質問に答えるだけで前提を作成できます。今すぐ開きます。",jump:()=>wzOpen()},
   {cat:"plan",q:"家族の設定をしたい",kw:["家族","子供","配偶者","生まれ年","寿命"],a:"「ライフプラン→前提の入力→家族・基本」で、家族の生年や続柄を設定します。",jump:()=>{MODE="lifeplan";pCur="plan";planSub="family";}},
   {cat:"plan",q:"年金の繰上げ・繰下げを試したい",kw:["年金","繰上げ","繰下げ","受給開始"],a:"「ライフプラン→前提の入力→収入」で年金の受給開始年齢を変更できます。65歳基準で繰上げ-0.4%/月、繰下げ+0.7%/月が自動反映されます。",jump:()=>{MODE="lifeplan";pCur="plan";planSub="income";}},
