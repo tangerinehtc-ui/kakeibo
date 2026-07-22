@@ -140,6 +140,11 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 .wzhead .x{margin-left:auto;background:transparent;border:none;font-size:22px;cursor:pointer;color:var(--sub);line-height:1;padding:0 4px}
 .wzprog{height:4px;background:var(--chip)}
 .wzprog>div{height:100%;background:var(--accent);transition:width .3s;width:0}
+.askOverlay{position:fixed;inset:0;z-index:120;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px}
+.askBox{background:var(--card);border-radius:14px;width:100%;max-width:420px;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+.askBox .askMsg{font-size:14px;margin-bottom:10px;white-space:pre-wrap}
+.askBox .askInput{width:100%;box-sizing:border-box;margin-bottom:14px}
+.askBox .askBtns{display:flex;gap:8px;justify-content:flex-end}
 .wzlog{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:180px}
 .wzb{max-width:86%;padding:9px 13px;border-radius:14px;font-size:14px;line-height:1.5;white-space:normal}
 .wzb.bot{align-self:flex-start;background:var(--chip);border-bottom-left-radius:4px}
@@ -204,7 +209,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 
 <script>
 "use strict";
-const APP_VERSION = "2026.07.20-17";
+const APP_VERSION = "2026.07.20-21";
 const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
 
 /* ========================================================================
@@ -233,6 +238,7 @@ const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
    　　　　　　 ※プロパンは都市ガスと案件が別で単価も高いため、枠を分けています
    　hoken    … 保険の無料相談（例：保険見直しラボ、ほけんの窓口）※商品名の推奨はしないこと
    　shoken   … NISA・証券口座開設（例：SBI証券、楽天証券、マネックス証券）
+   　gakushi  … 学資保険・教育資金の無料相談／資料請求（例：ほけんの窓口、学資保険比較）※商品名の推奨はしないこと
    ======================================================================== */
 const SAVE_LINKS={
   sim_rakuten:{label:"楽天モバイルを見る",url:""},
@@ -247,6 +253,7 @@ const SAVE_LINKS={
   lpgas:{label:"プロパンガスの料金を見直す",url:""},
   hoken:{label:"保険を無料で見直す",url:""},
   shoken:{label:"NISA・証券口座を比較する",url:""},
+  gakushi:{label:"学資保険・教育資金を相談する",url:""},
 };
 // 「次の一歩」カードに並べる汎用枠（キャリア個別の枠は診断結果のみに表示）
 const SAVE_LINK_GENERAL=["phone","furusato","denki","lpgas","hoken","shoken"];
@@ -263,6 +270,26 @@ function affLinkHtml(cfg, style){
 function anyAffLink(){ return Object.values(SAVE_LINKS).some(v=>v&&v.url); }
 const uid = () => Math.random().toString(36).slice(2,9);
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+// テキスト入力モーダル（window.promptの代替。PWA/一部環境でpromptが無効でも動く）。Promise<string|null>を返す
+function askText(message, def){
+  return new Promise(resolve=>{
+    const ov=document.createElement("div"); ov.className="askOverlay";
+    ov.innerHTML=`<div class="askBox">
+      <div class="askMsg">${String(message||"").replace(/</g,"&lt;")}</div>
+      <input type="text" class="askInput" value="${String(def==null?"":def).replace(/"/g,"&quot;")}">
+      <div class="askBtns"><button class="btn ghost sm askCancel">キャンセル</button><button class="btn sm askOk">OK</button></div>
+    </div>`;
+    document.body.appendChild(ov);
+    const inp=ov.querySelector(".askInput");
+    let done=false;
+    const finish=v=>{ if(done)return; done=true; ov.remove(); resolve(v); };
+    ov.querySelector(".askOk").onclick=()=>finish(inp.value);
+    ov.querySelector(".askCancel").onclick=()=>finish(null);
+    ov.addEventListener("click",e=>{ if(e.target===ov) finish(null); });
+    inp.addEventListener("keydown",e=>{ if(e.key==="Enter") finish(inp.value); else if(e.key==="Escape") finish(null); });
+    setTimeout(()=>{ try{ inp.focus(); inp.select(); }catch(e){} },30);
+  });
+}
 
 /* ---------- 教育費プリセット（万円/年・目安） ---------- */
 // 教育費プリセット（万円/年の目安）
@@ -287,6 +314,29 @@ const EDU_STAGES = [
   {label:"高校",from:15,to:17,opts:["高校(公立)","高校(私立)"]},
   {label:"大学",from:18,to:23,uni:true,opts:["大学(国公立)","大学(私立文系)","大学(私立理系)","大学(私立薬学・6年)","大学(私立医歯)","短大・専門(2年)","大学院(修士)","なし"]}
 ];
+// 進路ごとの「塾・習い事など学校外活動費」の目安（万円/年・文科省 子供の学習費調査）。
+// 上のEDU（総額）に含まれる内数。EDU−この額＝授業料・給食などの「学校でかかる費用」。
+const EDU_JUKU = {
+  "保育園(認可)":0,"幼稚園(公立)":9,"幼稚園(私立)":17,
+  "小学校(公立)":25,"小学校(私立)":66,
+  "中学校(公立)":37,"中学校(私立)":30,
+  "高校(公立)":20,"高校(私立)":17
+};
+// 子どもの一時費用プリセット（結婚援助・成人式・免許・留学など。amountは万円・ageは子の年齢）
+const CHILD_EVENT_PRESETS = [
+  {name:"結婚援助",amount:150,age:28},
+  {name:"成人式（振袖・スーツ等）",amount:30,age:20},
+  {name:"運転免許",amount:30,age:18},
+  {name:"留学",amount:150,age:20}
+];
+// 塾・習い事のプリセット（進路の目安に対して家庭のスタイルで上書き）。calcは万円/年を返す
+const JUKU_PRESETS = {
+  standard:{label:"統計の平均",calc:(label,choice)=>EDU_JUKU[choice]||0},
+  juken:{label:"中学受験・塾多め",calc:(label,choice)=>label==="小学校"?50:label==="中学校"?45:(EDU_JUKU[choice]||0)},
+  lessons:{label:"習い事中心",calc:(label,choice)=>({"未就学(3-5)":10,"小学校":15,"中学校":20,"高校":15}[label]||0)},
+  min:{label:"最小限",calc:(label,choice)=>Math.round((EDU_JUKU[choice]||0)*0.4)},
+  none:{label:"塾・習い事なし",calc:()=>0}
+};
 
 /* ---------- 電化製品プリセット（名前・耐用年数・金額万円） ---------- */
 const APPL_PRESETS=[
@@ -383,6 +433,24 @@ function ensurePlanModel(){
   if(S.inflation==null) S.inflation=0;
   if(S.inputMode!=="simple"&&S.inputMode!=="detail") S.inputMode="detail"; // 既存データ・サンプルは詳細モード
   if(!Array.isArray(S.appliances)) S.appliances=[];
+  if(!Array.isArray(S.childEvents)) S.childEvents=[];
+  // 教育費：塾・習い事を分離したモデルへ移行（既存の総額を保ったまま内訳に分ける）
+  (S.educations||[]).forEach(ed=>{
+    if(!ed.juku||typeof ed.juku!=="object") ed.juku={};
+    if(!ed.jukuPlan) ed.jukuPlan="standard";
+    if(!ed._jukuMig){
+      ed._jukuMig=true;
+      // 旧「金額」は総額の手入力だったので、塾分を引いて「学校の費用」に読み替える（総額は不変）
+      if(ed.amounts&&typeof ed.amounts==="object"){
+        for(const label in ed.amounts){
+          if(label==="大学") continue; // 大学は塾分なし＝総額のまま
+          const choice=ed.choices&&ed.choices[label];
+          const jk=(choice&&EDU_JUKU[choice])||0;
+          ed.amounts[label]=Math.max(0,(+ed.amounts[label]||0)-jk);
+        }
+      }
+    }
+  });
   if(!Array.isArray(S.assets)) S.assets=[];
   S.assets.forEach(a=>{
     if(!a.id) a.id=uid();
@@ -564,23 +632,36 @@ function eduUniYears(edu){
   const ch=edu&&edu.choices&&edu.choices["大学"];
   return EDU_UNI_YEARS[ch]!=null?EDU_UNI_YEARS[ch]:4;
 }
-// あるステージの年額（手入力の金額があれば優先、なければ選択肢の目安）
-function eduAmount(edu, label){
+// あるステージの「学校でかかる費用」年額（手入力があれば優先、なければ 目安総額−塾分）
+function eduSchool(edu, label){
   const ov=edu&&edu.amounts&&edu.amounts[label];
   if(ov!=null&&ov!=="") return Math.max(0,+ov);
   const choice=edu&&edu.choices&&edu.choices[label];
-  return (choice&&choice!=="なし") ? (EDU[choice]||0) : 0;
+  if(!choice||choice==="なし") return 0;
+  return Math.max(0,(EDU[choice]||0)-(EDU_JUKU[choice]||0));
 }
+// あるステージの「塾・習い事」年額（手入力があれば優先、なければプリセットの目安）。大学は対象外
+function eduJuku(edu, label){
+  if(label==="大学") return 0;
+  const ov=edu&&edu.juku&&edu.juku[label];
+  if(ov!=null&&ov!=="") return Math.max(0,+ov);
+  const choice=edu&&edu.choices&&edu.choices[label];
+  if(!choice||choice==="なし") return 0;
+  const plan=(edu&&edu.jukuPlan)||"standard";
+  return Math.max(0,(JUKU_PRESETS[plan]||JUKU_PRESETS.standard).calc(label,choice));
+}
+// 後方互換：ステージ年額の合計（学校＋塾・習い事）
+function eduAmount(edu, label){ return eduSchool(edu,label)+eduJuku(edu,label); }
 function eduAt(edu, childAge){
   for(const st of EDU_STAGES){
     if(st.uni) continue; // 大学は年数可変なので別扱い
-    if(childAge>=st.from && childAge<=st.to) return eduAmount(edu, st.label);
+    if(childAge>=st.from && childAge<=st.to) return eduSchool(edu,st.label)+eduJuku(edu,st.label);
   }
-  // 大学等（18歳開始・年数はuniYearsで可変）
+  // 大学等（18歳開始・年数はuniYearsで可変。塾・習い事は対象外）
   const ch=edu&&edu.choices&&edu.choices["大学"];
   if(ch&&ch!=="なし"){
     const yrs=eduUniYears(edu);
-    if(yrs>0 && childAge>=18 && childAge<18+yrs) return eduAmount(edu, "大学");
+    if(yrs>0 && childAge>=18 && childAge<18+yrs) return eduSchool(edu,"大学");
   }
   return 0;
 }
@@ -732,6 +813,8 @@ function computeCF(opt){
     let edu=0;
     S.educations.forEach(ed=>{ const c=member(ed.childId); if(!c) return; edu+=eduAt(ed, ages[ed.childId])*f; });
     cat["教育・結婚資金"]+=edu;
+    // 子どもの一時費用（結婚援助・成人式・免許・留学など）。子がその年齢の年に1回だけ計上
+    (S.childEvents||[]).forEach(ev=>{ if(ages[ev.childId]===(+ev.age||0)) cat["教育・結婚資金"]+=(+ev.amount||0)*f; });
     // 電化製品の買い替え（購入年＋耐用年数ごとに同額を計上・インフレ反映）
     let appliance=0;
     (S.appliances||[]).forEach(ap=>{
@@ -1448,7 +1531,10 @@ function renderExpense(){
       `<div id="livList"></div><button class="btn ghost sm addbtn" id="addLiv">+ 期間を追加</button>`, true)
     + collapseCard("exp_housing","住宅費","", `<div id="housing"></div>`, true)
     + collapseCard("exp_edu","教育費","子ごとに進路を選ぶと、その子の年齢に合わせて教育費が自動計上されます（金額は文科省統計の目安・万円/年）。",
-      `<div id="eduList"></div>`, false)
+      `<div id="eduList"></div><div id="eduPrepare"></div>`, false)
+    + collapseCard("exp_childevt","子どもの特別費用（結婚・成人式・免許 など）","子が特定の年齢になった年に1回だけかかる大きな費用を登録します。結婚援助・成人式・運転免許・留学などの目安をボタンで足せます（金額はご家庭に合わせて変更してください）。",
+      `<div id="childEvtList"></div>
+       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${CHILD_EVENT_PRESETS.map((p,i)=>`<button class="btn ghost sm" data-cevt="${i}">＋ ${p.name.replace(/（.*/,"")}</button>`).join("")}<button class="btn ghost sm" data-cevt="free">＋ 自由に追加</button></div>`, false)
     + collapseCard("exp_appl","電化製品の買い替え","購入した年・金額と想定の寿命（耐用年数）を設定すると、寿命が来るたびに同じ金額が買い替え費として自動計上されます。購入年は実際に買った年に直してください。",
       applBody, false)
     + collapseCard("exp_other","その他の支出（車・旅行 など）","「金額 × 対象者の年齢帯 × 何年ごと」で、周期的な支出をまとめて表現します。保険料は「保険」タブでの登録がおすすめです（シミュレーションに連動します）。",
@@ -1479,6 +1565,10 @@ function renderExpense(){
     b.onclick=()=>{S.educations.push({id:uid(),childId:c.id,independentAge:22,choices:{}});commit();};
     ed.appendChild(b);
   });
+  renderEduPrepare();
+
+  // 子どもの特別費用（結婚・成人式・免許 など）
+  renderChildEvtList();
 
   // 電化製品
   renderApplList();
@@ -1494,6 +1584,55 @@ function applNextYear(ap){
   const by=+ap.boughtYear||0, ly=Math.max(1,+ap.lifeYears||10);
   if(!by) return null;
   let y=by+ly; while(y<S.baseYear) y+=ly; return y;
+}
+function childList(){ return S.members.filter(m=>m.role==="child"); }
+// 教育費のピークを見せた文脈で、教育資金の準備（学資保険・NISA）への導線を出す
+function renderEduPrepare(){
+  const box=document.getElementById("eduPrepare"); if(!box) return;
+  let eduTotal=0;
+  S.educations.forEach(ed=>{ for(let a=0;a<=25;a++) eduTotal+=eduAt(ed,a); });
+  // 教育費が意味のある規模（300万円以上）のときだけ表示
+  if(eduTotal<300){ box.innerHTML=""; return; }
+  box.innerHTML=`<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+    <h3 style="margin:0 0 6px;font-size:15px">📚 教育資金の準備</h3>
+    <p class="mini">お子さまの教育費は全員で <b>合計 約${MAN(eduTotal)}万円</b> かかる見込みです。大学入学時などに大きな支出が集中しやすいため、早めの準備が安心です。</p>
+    <p class="mini" style="margin-top:6px">・<b>学資保険</b>：計画的に積み立てる方法。契約者に万一のとき以降の保険料が免除される商品もあります。<br>
+    ・<b>つみたてNISA</b>：非課税で長期運用し教育資金を育てる方法（元本割れの可能性があります）。</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      ${affLinkHtml(SAVE_LINKS.gakushi)}${affLinkHtml(SAVE_LINKS.shoken)}
+    </div>
+    <p class="mini" style="margin-top:6px;color:var(--sub)">※ このアプリは特定の保険・金融商品をおすすめするものではありません。加入・投資はご自身の判断で行ってください。</p>
+  </div>`;
+}
+function renderChildEvtList(){
+  const box=document.getElementById("childEvtList"); if(!box) return;
+  box.innerHTML="";
+  const kids=childList();
+  if(!kids.length){ box.innerHTML=`<p class="mini">家族タブで続柄「子」を追加すると、ここに一時費用を登録できます。</p>`; }
+  (S.childEvents||[]).forEach(ev=>{
+    const c=member(ev.childId);
+    const yr=c?c.birthYear+(+ev.age||0):null;
+    const d=document.createElement("div"); d.className="itemrow"; d.style.gridTemplateColumns="1.3fr 1fr 84px 96px auto";
+    d.innerHTML=`
+      <div><label class="f">費目</label><input type="text" value="${(ev.name||"").replace(/"/g,"&quot;")}" data-k="name"></div>
+      <div><label class="f">対象の子</label><select data-k="childId">${kids.map(k=>`<option value="${k.id}"${ev.childId===k.id?" selected":""}>${k.name}</option>`).join("")}</select></div>
+      <div><label class="f">金額(万円)</label><input type="number" value="${ev.amount}" data-k="amount"></div>
+      <div><label class="f">子の年齢</label><input type="number" value="${ev.age}" data-k="age"></div>
+      <div style="align-self:center">${yr?`<span class="mini">${yr}年</span> `:""}<button class="btn danger sm" title="削除">×</button></div>`;
+    d.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
+      const k=inp.dataset.k; ev[k]=(k==="name"||k==="childId")?e.target.value:+e.target.value; commit();
+    });
+    d.querySelector(".danger").onclick=()=>{ S.childEvents=S.childEvents.filter(x=>x!==ev); commit(); };
+    box.appendChild(d);
+  });
+  // プリセット追加 / 自由追加
+  document.querySelectorAll("[data-cevt]").forEach(b=>b.onclick=()=>{
+    const kid=childList()[0]; if(!kid){ alert("先に家族タブで「子」を追加してください。"); return; }
+    const v=b.dataset.cevt;
+    const base=v==="free"?{name:"新しい費用",amount:50,age:20}:CHILD_EVENT_PRESETS[+v];
+    S.childEvents.push({id:uid(),childId:kid.id,name:base.name,amount:base.amount,age:base.age});
+    commit();
+  });
 }
 function renderApplList(){
   const al=document.getElementById("applList"); if(!al) return;
@@ -1690,39 +1829,55 @@ function renderHousing(box){
 }
 function eduCard(edu){
   if(!edu.amounts||typeof edu.amounts!=="object") edu.amounts={};
+  if(!edu.juku||typeof edu.juku!=="object") edu.juku={};
+  if(!edu.jukuPlan) edu.jukuPlan="standard";
   const c=member(edu.childId);
-  // 総額（0〜独立まで一度シミュレートして合計）
-  let total=0; for(let a=0;a<=25;a++) total+=eduAt(edu,a);
+  // 総額と、うち塾・習い事の合計（0〜独立まで一度シミュレート）
+  let total=0, jukuTotal=0;
+  for(let a=0;a<=25;a++){ total+=eduAt(edu,a); for(const st of EDU_STAGES){ if(!st.uni&&a>=st.from&&a<=st.to) jukuTotal+=eduJuku(edu,st.label); } }
   const d=document.createElement("div"); d.className="itemrow"; d.style.display="block";
-  d.innerHTML=`<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+  d.innerHTML=`<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
     <span class="tag">${c?c.name:"子"}</span>
-    <span class="mini">在学中の教育費 合計 約 <b>${MAN(total)}万円</b></span>
+    <span class="mini">在学中の教育費 合計 約 <b>${MAN(total)}万円</b>（うち塾・習い事 約 <b>${MAN(jukuTotal)}万円</b>）</span>
     <div style="max-width:150px;margin-left:auto"><label class="f">独立年齢</label><input type="number" data-k="independentAge" value="${edu.independentAge}"></div>
     <button class="btn danger sm">×</button></div>
-    <p class="mini" style="margin:-2px 0 8px">各段階で進路を選ぶと目安の金額（万円/年）が入ります。金額は直接書き換えられます。大学は年数も変更できます（短大2年・薬学/医歯6年など）。</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <label class="f" style="margin:0">塾・習い事の目安</label>
+      <select class="juku-plan" style="width:auto">${Object.entries(JUKU_PRESETS).map(([k,v])=>`<option value="${k}"${edu.jukuPlan===k?" selected":""}>${v.label}</option>`).join("")}</select>
+    </div>
+    <p class="mini" style="margin:-2px 0 8px">進路を選ぶと「学校の費用」と「塾・習い事」の目安が入ります。どちらも直接書き換えられます。中学受験や習い事中心などは上のプリセットで一括変更できます。大学は年数も変更できます。</p>
+    <div class="edu-row" style="color:var(--sub);font-size:11px;border-bottom:1px solid var(--line)"><div class="edu-lab"></div><div>進路</div><div>学校の費用</div><div>塾・習い事</div></div>
     <div id="stg_${edu.id}"></div>`;
   d.querySelector("[data-k]").onchange=e=>{edu.independentAge=+e.target.value;commit();};
   d.querySelector(".danger").onclick=()=>{S.educations=S.educations.filter(x=>x!==edu);commit();};
+  // 塾・習い事プリセットの変更（手入力の上書きはリセット）
+  d.querySelector(".juku-plan").onchange=e=>{ edu.jukuPlan=e.target.value; edu.juku={}; commit(); };
   const sg=d.querySelector(`#stg_${edu.id}`);
   EDU_STAGES.forEach(st=>{
     const row=document.createElement("div"); row.className="edu-row";
     const sel=edu.choices[st.label]||st.opts[0];
-    const amt=eduAmount(edu,st.label);
+    const school=eduSchool(edu,st.label);
+    const juku=eduJuku(edu,st.label);
     const isNone=sel==="なし";
     row.innerHTML=`
       <div class="edu-lab">${st.uni?"大学等":st.label}</div>
       <select class="edu-sel">${st.opts.map(o=>`<option${o===sel?" selected":""}>${o}</option>`).join("")}</select>
-      <div class="edu-amt"><input type="number" class="edu-amtin" value="${isNone?0:amt}" ${isNone?"disabled":""}><span class="mini">万円/年</span></div>
-      ${st.uni?`<div class="edu-yr"><input type="number" class="edu-yrin" value="${eduUniYears(edu)}" min="0" max="8" ${isNone?"disabled":""}><span class="mini">年間</span></div>`:""}`;
-    // 進路の選択変更 → 金額の手入力をリセットして目安を再表示、大学は年数も既定に
+      <div class="edu-amt"><input type="number" class="edu-amtin" value="${isNone?0:school}" ${isNone?"disabled":""}><span class="mini">万/年</span></div>
+      ${st.uni
+        ? `<div class="edu-yr"><input type="number" class="edu-yrin" value="${eduUniYears(edu)}" min="0" max="8" ${isNone?"disabled":""}><span class="mini">年間</span></div>`
+        : `<div class="edu-amt"><input type="number" class="edu-jukuin" value="${isNone?0:juku}" ${isNone?"disabled":""}><span class="mini">万/年</span></div>`}`;
+    // 進路の選択変更 → 学校・塾の手入力をリセットして目安を再表示、大学は年数も既定に
     row.querySelector(".edu-sel").onchange=e=>{
       edu.choices[st.label]=e.target.value;
-      if(edu.amounts) delete edu.amounts[st.label];
+      delete edu.amounts[st.label]; delete edu.juku[st.label];
       if(st.uni){ delete edu.uniYears; const y=18+eduUniYears(edu); if((+edu.independentAge||0)<y) edu.independentAge=y; }
       commit();
     };
-    // 金額の直接編集
+    // 学校の費用の直接編集
     row.querySelector(".edu-amtin").onchange=e=>{ edu.amounts[st.label]=Math.max(0,+e.target.value||0); commit(); };
+    // 塾・習い事の直接編集
+    const jk=row.querySelector(".edu-jukuin");
+    if(jk) jk.onchange=e=>{ edu.juku[st.label]=Math.max(0,+e.target.value||0); commit(); };
     // 大学の年数編集（独立年齢が不足なら自動で引き上げ）
     const yr=row.querySelector(".edu-yrin");
     if(yr) yr.onchange=e=>{ edu.uniYears=Math.max(0,+e.target.value||0); const y=18+eduUniYears(edu); if((+edu.independentAge||0)<y) edu.independentAge=y; commit(); };
@@ -2106,19 +2261,19 @@ function renderScenario(){
     ${S.scenarios.length?`<div class="chartbox" style="margin-top:14px">${scenarioChart(cur.rows,S.scenarios.map(sn=>rowsFor(sn).rows))}</div>
       <div class="legend"><span><i style="background:var(--accent)"></i>${curName}</span>${list.map(({sn,col})=>`<span><i style="background:${col}"></i>${esc(sn.name||"無題")}</span>`).join("")}</div>`:`<p class="mini" style="margin-top:8px">保存したプランがありません。上の「現在のプランを別名で保存」で追加すると、比較グラフが表示されます。</p>`}
   </div>`;
-  document.getElementById("snapSave").onclick=()=>{
-    const name=(prompt("このプランの名前（例：現状維持、繰上返済あり）")||"").trim(); if(!name) return;
+  document.getElementById("snapSave").onclick=async()=>{
+    const name=((await askText("このプランの名前（例：現状維持、繰上返済あり）"))||"").trim(); if(!name) return;
     const id=uid();
     S.scenarios.push({id,name,savedAt:new Date().toISOString(),data:planSnapData()});
     S.activeScenarioId=id;
     commit();
   };
-  el.querySelectorAll("[data-load]").forEach(b=>b.onclick=()=>{
+  el.querySelectorAll("[data-load]").forEach(b=>b.onclick=async()=>{
     const target=S.scenarios.find(x=>x.id===b.dataset.load); if(!target) return;
     if(dirty){
       if(active){ active.data=planSnapData(); active.savedAt=new Date().toISOString(); }
       else if(confirm("現在のプランは未保存です。名前を付けて保存してから切り替えますか？\n（キャンセル＝保存せずに切り替え。今の内容は失われます）")){
-        const name=(prompt("プラン名（例：現状維持）")||"").trim();
+        const name=((await askText("プラン名（例：現状維持）"))||"").trim();
         if(!name) return; // 中断
         S.scenarios.push({id:uid(),name,savedAt:new Date().toISOString(),data:planSnapData()});
       }
@@ -2135,10 +2290,10 @@ function renderScenario(){
     if(S.activeScenarioId===b.dataset.delsn) delete S.activeScenarioId;
     commit();
   });
-  el.querySelectorAll("[data-dup]").forEach(b=>b.onclick=()=>{
+  el.querySelectorAll("[data-dup]").forEach(b=>b.onclick=async()=>{
     const sn=S.scenarios.find(x=>x.id===b.dataset.dup); if(!sn) return;
     const def=`${sn.name||"無題"}のコピー`;
-    const name=(prompt("複製したプランの名前", def)||"").trim(); if(!name) return;
+    const name=((await askText("複製したプランの名前", def))||"").trim(); if(!name) return;
     const copy={id:uid(), name, savedAt:new Date().toISOString(), data:JSON.parse(JSON.stringify(sn.data))};
     S.scenarios.splice(S.scenarios.indexOf(sn)+1, 0, copy);
     commit();
@@ -2182,6 +2337,8 @@ function renderTimeline(opt,scen){
     const ed=S.educations.find(e=>e.childId===c.id);
     if(ed) add(c.birthYear+ (+ed.independentAge||22),`${c.name} 独立`);
   });
+  // 子どもの一時費用（結婚・成人式・免許 など）
+  (S.childEvents||[]).forEach(ev=>{ const c=member(ev.childId); if(c&&+ev.amount>0) add(c.birthYear+(+ev.age||0),`${c.name} ${ev.name}（${MAN(ev.amount)}万円）`); });
   // 就業終了・年金
   S.incomes.forEach(inc=>{ const m=member(inc.memberId); if(!m) return;
     if(inc.type==="salary"&&inc.endAge) add(m.birthYear+inc.endAge,`${m.name} 就業終了(${inc.endAge}歳)`);
@@ -2771,9 +2928,9 @@ function renderKInput(){
   </div>`;
   document.getElementById("kExp").onclick=()=>{kKind="expense";render();};
   document.getElementById("kInc").onclick=()=>{kKind="income";render();};
-  document.getElementById("kCatSel").onchange=e=>{
+  document.getElementById("kCatSel").onchange=async e=>{
     if(e.target.value==="__add__"){
-      const n=(prompt(kKind==="expense"?"追加する支出カテゴリ名":"追加する収入カテゴリ名")||"").trim();
+      const n=((await askText(kKind==="expense"?"追加する支出カテゴリ名":"追加する収入カテゴリ名"))||"").trim();
       if(!n){ render(); return; } // 選択を元に戻す
       if(catsFor(kKind).includes(n)){ alert("同じ名前のカテゴリが既にあります"); kCat=n; render(); return; }
       if(kKind==="expense"){
@@ -3496,9 +3653,9 @@ function renderKSave(){
   const rateInp=document.getElementById("svRate");
   if(rateInp) rateInp.onchange=e=>{ sv.rate=Math.max(0,+e.target.value||0); commit(); };
   const saveBtn=document.getElementById("svSaveScen");
-  if(saveBtn) saveBtn.onclick=()=>{
+  if(saveBtn) saveBtn.onclick=async()=>{
     if(ySave<=0){ alert("先に節約する項目にチェックを入れてください。"); return; }
-    const name=(prompt("保存する節約プランの名前","節約プラン")||"").trim(); if(!name) return;
+    const name=((await askText("保存する節約プランの名前","節約プラン"))||"").trim(); if(!name) return;
     const bak=JSON.stringify(S.savingReflect||null);
     S.savingReflect={on:true,annual:annualMan,invest:sv.mode==="invest",rate:+sv.rate||3};
     const data=planSnapData();
@@ -3663,8 +3820,8 @@ function renderKManage(){
   };
   renderCats("catExp",S.kakeibo.cats.expense,true);
   renderCats("catInc",S.kakeibo.cats.income,false);
-  const addCat=(arr,isExp)=>{
-    const n=(prompt(isExp?"支出カテゴリ名":"収入カテゴリ名")||"").trim(); if(!n) return;
+  const addCat=async(arr,isExp)=>{
+    const n=((await askText(isExp?"追加する支出カテゴリ名":"追加する収入カテゴリ名"))||"").trim(); if(!n) return;
     if(arr.some(c=>c.name===n)){ alert("同じ名前のカテゴリが既にあります"); return; }
     arr.push(isExp?{name:n,living:false}:{name:n}); commit();
   };
@@ -3981,7 +4138,8 @@ function renderSettings(){
     <h2>収益化リンクの設定状況（公開する人向け）</h2>
     <p class="hint">「家計簿→節約」に表示される乗り換え・比較リンクの状態です。設定するには index.html 冒頭の <code>SAVE_LINKS</code> にURLを貼り、GitHubに再アップロードしてください。</p>
     ${[["スマホ料金診断（キャリア別）",["sim_rakuten","sim_ahamo","sim_ymobile","sim_uq","sim_linemo","sim_mvno"]],
-       ["その他（汎用）",SAVE_LINK_GENERAL]].map(([grp,keys])=>`
+       ["節約・比較（汎用）",["phone","furusato","denki","lpgas"]],
+       ["保険・投資・教育（文脈連動）",["hoken","shoken","gakushi"]]].map(([grp,keys])=>`
       <div style="font-size:13px;color:var(--sub);margin:10px 0 4px"><b>${grp}</b></div>
       <div style="display:grid;gap:4px">
         ${keys.map(k=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:14px">
