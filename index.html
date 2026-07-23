@@ -107,7 +107,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
   header h1{display:none}
   nav{position:fixed;left:0;right:0;bottom:0;top:auto;border-top:1px solid var(--line);border-bottom:none;z-index:30;justify-content:space-around;padding:6px 4px calc(6px + env(safe-area-inset-bottom,0px))}
   nav button{flex:1;text-align:center;padding:10px 2px;font-size:13px}
-  main{padding-bottom:90px}
+  main{padding-bottom:calc(90px + env(safe-area-inset-bottom,0px))}
   .brow{grid-template-columns:88px 92px 1fr;gap:6px}
 }
 .tl-row{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
@@ -121,7 +121,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
   .chip:not(.on){display:none}
   body{background:#fff}
 }
-@media(max-width:600px){ main{padding:10px} .card{padding:12px} }
+@media(max-width:600px){ main{padding:10px 10px calc(90px + env(safe-area-inset-bottom,0px))} .card{padding:12px} }
 /* ライフプラン診断 */
 .diag-badge{display:flex;align-items:center;gap:14px;margin-bottom:6px}
 .diag-rank{width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:700;color:#fff;flex:none}
@@ -209,7 +209,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 
 <script>
 "use strict";
-const APP_VERSION = "2026.07.20-21";
+const APP_VERSION = "2026.07.20-23";
 const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
 
 /* ========================================================================
@@ -288,6 +288,22 @@ function askText(message, def){
     ov.addEventListener("click",e=>{ if(e.target===ov) finish(null); });
     inp.addEventListener("keydown",e=>{ if(e.key==="Enter") finish(inp.value); else if(e.key==="Escape") finish(null); });
     setTimeout(()=>{ try{ inp.focus(); inp.select(); }catch(e){} },30);
+  });
+}
+// アプリ内confirm（PWA等でconfirm()がブロックされる環境でも動く）。true/falseを返す
+function askConfirm(message, okLabel){
+  return new Promise(resolve=>{
+    const ov=document.createElement("div"); ov.className="askOverlay";
+    ov.innerHTML=`<div class="askBox">
+      <div class="askMsg">${String(message||"").replace(/</g,"&lt;")}</div>
+      <div class="askBtns"><button class="btn ghost sm askCancel">キャンセル</button><button class="btn sm askOk">${String(okLabel||"OK").replace(/</g,"&lt;")}</button></div>
+    </div>`;
+    document.body.appendChild(ov);
+    let done=false;
+    const finish=v=>{ if(done)return; done=true; ov.remove(); resolve(v); };
+    ov.querySelector(".askOk").onclick=()=>finish(true);
+    ov.querySelector(".askCancel").onclick=()=>finish(false);
+    ov.addEventListener("click",e=>{ if(e.target===ov) finish(false); });
   });
 }
 
@@ -886,12 +902,13 @@ if(!["khome","kinput","ksave","kmanage"].includes(kCur)) kCur="khome";
 let tMetric=UI.tMetric||"savings", tMode=UI.tMode||"month", tFrom=UI.tFrom||"", tTo=UI.tTo||"";
 let settingsOpen=false;
 let anaSub=UI.anaSub||"cf", yMonth=UI.yMonth||todayStr().slice(0,7);
+let yjView=UI.yjView==="year"?"year":"month";
 let emgMode=UI.emgMode||"death";
 let anaScen=UI.anaScen||"normal";
 let COLLAPSE=UI.collapse&&typeof UI.collapse==="object"?UI.collapse:{};
 function isOpen(key,def){ return COLLAPSE[key]===undefined?def:COLLAPSE[key]; }
 function setOpen(key,val){ COLLAPSE[key]=val; saveUI(); }
-function saveUI(){ try{ localStorage.setItem(UKEY,JSON.stringify({mode:MODE,kCur,pCur,planSub,kHomeSub,tMetric,tMode,tFrom,tTo,anaSub,yMonth,emgMode,anaScen,collapse:COLLAPSE})); }catch(e){} }
+function saveUI(){ try{ localStorage.setItem(UKEY,JSON.stringify({mode:MODE,kCur,pCur,planSub,kHomeSub,tMetric,tMode,tFrom,tTo,anaSub,yMonth,yjView,emgMode,anaScen,collapse:COLLAPSE})); }catch(e){} }
 /* もしもの備え：本人・配偶者 */
 function emgAdults(){ return S.members.filter(m=>m.role==="self"||m.role==="spouse"); }
 function scenLabel(scen){ return {death:"万一（死亡）",disable:"働けなくなった場合"}[scen]||""; }
@@ -2133,6 +2150,10 @@ function renderYojitsu(){
   ensureKakeibo();
   const year=+yMonth.slice(0,4);
   const plan=monthlyPlan(year);
+  const [yy,mm]=yMonth.split("-");
+  const segHtml=`<div class="seg2" style="max-width:240px;margin-bottom:10px"><button data-yjv="month" class="${yjView==="month"?"on":""}">月ごと</button><button data-yjv="year" class="${yjView==="year"?"on":""}">年ごと</button></div>`;
+  const bindYjSeg=()=>{ el.querySelectorAll("[data-yjv]").forEach(b=>b.onclick=()=>{ yjView=b.dataset.yjv; saveUI(); render(); }); };
+  if(yjView==="year"){ renderYojitsuYear(el,year,mm,plan,segHtml,bindYjSeg); return; }
   const monthList=E.filter(x=>!x.deleted&&x.date&&x.date.startsWith(yMonth));
   const LS=livingSet();
   const aExp=cat=>monthList.filter(x=>x.kind==="expense"&&x.category===cat).reduce((s,x)=>s+x.amount,0);
@@ -2143,10 +2164,9 @@ function renderYojitsu(){
     insurance: aExp("保険")/10000,
     invest: aExp(INVEST_CAT)/10000,
   };
-  const [yy,mm]=yMonth.split("-");
   if(!plan){
-    el.innerHTML=`<div class="card">${ymNavHtml("yPrev","yNext",yy+"年"+(+mm)+"月")}<p class="mini" style="margin-top:12px">${year}年はライフプランの試算期間外です。</p></div>`;
-    bindYmNav(); return;
+    el.innerHTML=`<div class="card">${segHtml}${ymNavHtml("yPrev","yNext",yy+"年"+(+mm)+"月")}<p class="mini" style="margin-top:12px">${year}年はライフプランの試算期間外です。</p></div>`;
+    bindYmNav(); bindYjSeg(); return;
   }
   const cmpRow=(label,planV,actualV,goodWhenActualHigher)=>{
     const diff=actualV-planV;
@@ -2163,8 +2183,9 @@ function renderYojitsu(){
   const actSave=actual.income-actual.living-actual.housing-actual.insurance-actual.invest;
   el.innerHTML=`
   <div class="card">
+    ${segHtml}
     ${ymNavHtml("yPrev","yNext",yy+"年"+(+mm)+"月")}
-    <p class="hint" style="margin-top:10px">ライフプランが想定する毎月の金額（プラン）と、家計簿の実績を並べています。単位：万円。差が大きい項目には「前提を見直す」から該当画面へ移動できます。</p>
+    <p class="hint" style="margin-top:10px">ライフプランが想定する毎月の金額（プラン）と、家計簿の実績を並べています。単位：万円。「年ごと」に切り替えると、実績をプランに反映することもできます。</p>
     <div class="brow total" style="grid-template-columns:1fr 78px 78px 90px"><span class="bname">経常項目</span><span class="mini" style="text-align:right">プラン</span><span class="mini" style="text-align:right">実績</span><span class="mini" style="text-align:right">差</span></div>
     ${cmpRow("収入（手取り）",plan.recur.income,actual.income,true,"income")}
     ${cmpRow("生活費",plan.recur.living,actual.living,false,"expense")}
@@ -2190,8 +2211,121 @@ function renderYojitsu(){
     <p class="hint">車の買い替え・教育費・住宅メンテ・旅行などは月ごとにばらつくため、${year}年の年間プランと、1〜${+mm}月までの実績（累計）で比べます。単位：万円。</p>
     ${eventCompareRows(plan.events,year,+mm)}
   </div>`;
-  bindYmNav();
+  bindYmNav(); bindYjSeg();
   el.querySelectorAll("[data-jump]").forEach(b=>b.onclick=()=>{ MODE="lifeplan"; pCur="plan"; planSub=b.dataset.jump; render(); window.scrollTo(0,0); });
+}
+// 予実：年ごとビュー（年間のズレ確認＋実績をプランへ反映）
+function renderYojitsuYear(el,year,mm,plan,segHtml,bindYjSeg){
+  const nav=`<div class="monthnav" style="margin-bottom:0"><button class="btn ghost sm" id="yPrev">◀</button><b>${year}年</b><button class="btn ghost sm" id="yNext">▶</button></div>`;
+  const bindNav=()=>{
+    const p=document.getElementById("yPrev"),n=document.getElementById("yNext");
+    if(p) p.onclick=()=>{ yMonth=(year-1)+"-"+mm; render(); };
+    if(n) n.onclick=()=>{ yMonth=(year+1)+"-"+mm; render(); };
+  };
+  if(!plan){
+    el.innerHTML=`<div class="card">${segHtml}${nav}<p class="mini" style="margin-top:12px">${year}年はライフプランの試算期間外です。</p></div>`;
+    bindNav(); bindYjSeg(); return;
+  }
+  const yearList=E.filter(x=>!x.deleted&&x.date&&x.date.startsWith(year+"-"));
+  const mCnt=new Set(yearList.map(x=>x.date.slice(0,7))).size;
+  if(mCnt===0){
+    el.innerHTML=`<div class="card">${segHtml}${nav}<p class="mini" style="margin-top:12px">${year}年の家計簿記録がまだありません。家計簿に入力すると、年間のプランとのズレを確認できます。</p></div>`;
+    bindNav(); bindYjSeg(); return;
+  }
+  const LS=livingSet();
+  const aExp=cat=>yearList.filter(x=>x.kind==="expense"&&x.category===cat).reduce((s,x)=>s+x.amount,0);
+  // 実績（記録のある月の平均 → 万円/月）
+  const avg={
+    income: yearList.filter(x=>x.kind==="income").reduce((s,x)=>s+x.amount,0)/10000/mCnt,
+    living: yearList.filter(x=>x.kind==="expense"&&LS.has(x.category)).reduce((s,x)=>s+x.amount,0)/10000/mCnt,
+    housing: aExp("住宅")/10000/mCnt,
+    insurance: aExp("保険")/10000/mCnt,
+    invest: aExp(INVEST_CAT)/10000/mCnt,
+  };
+  const cmpRowY=(label,planM,avgM,goodWhenActualHigher)=>{
+    const planY=planM*12, actY=avgM*12, diff=actY-planY;
+    const warn=Math.abs(diff)>=Math.max(12,planY*0.1) && (goodWhenActualHigher?diff<0:diff>0);
+    const col=warn?"var(--neg)":"var(--sub)";
+    return `<div class="brow" style="grid-template-columns:1fr 84px 84px 92px">
+      <span class="bname">${label}</span>
+      <span style="text-align:right">${planY.toFixed(0)}</span>
+      <span style="text-align:right">${actY.toFixed(0)}</span>
+      <span style="text-align:right;color:${col}">${diff>=0?"+":""}${diff.toFixed(0)}${warn?" ⚠":""}</span>
+    </div>`;
+  };
+  const planSaveY=(plan.recur.income-plan.recur.living-plan.recur.housing-plan.recur.insurance)*12;
+  const actSaveY=(avg.income-avg.living-avg.housing-avg.insurance-avg.invest)*12;
+  // 実績をプランへ反映（生活費・積立のみ。他は前提が複雑なためジャンプで誘導）
+  const R1=v=>Math.round(v*10)/10;
+  const fitRow=(label,planM,avgM,key)=>{
+    const near=Math.abs(avgM-planM)<0.3;
+    return `<div class="brow" style="grid-template-columns:1fr auto">
+      <span class="bname">${label}<span class="mini" style="display:block;color:var(--sub)">プラン 月${R1(planM)}万円 → 実績平均 月${R1(avgM)}万円</span></span>
+      <span style="text-align:right;align-self:center">${near?`<span class="mini" style="color:var(--pos)">ほぼ一致 ✓</span>`:`<button class="btn sm" data-yjfit="${key}" data-val="${R1(avgM)}">実績に合わせる</button>`}</span>
+    </div>`;
+  };
+  el.innerHTML=`
+  <div class="card">
+    ${segHtml}
+    ${nav}
+    <p class="hint" style="margin-top:10px">${year}年の年間プランと、家計簿の実績（記録のある${mCnt}ヶ月の平均×12ヶ月に換算）を比べています。単位：万円/年。</p>
+    <div class="brow total" style="grid-template-columns:1fr 84px 84px 92px"><span class="bname">経常項目</span><span class="mini" style="text-align:right">プラン(年)</span><span class="mini" style="text-align:right">実績(年換算)</span><span class="mini" style="text-align:right">差</span></div>
+    ${cmpRowY("収入（手取り）",plan.recur.income,avg.income,true)}
+    ${cmpRowY("生活費",plan.recur.living,avg.living,false)}
+    ${cmpRowY("住宅（ローン・家賃）",plan.recur.housing,avg.housing,false)}
+    ${cmpRowY("保険料",plan.recur.insurance,avg.insurance,false)}
+    ${cmpRowY("投資・貯蓄",plan.recur.invest,avg.invest,true)}
+    <div class="brow total" style="grid-template-columns:1fr 84px 84px 92px">
+      <span class="bname">貯蓄（手取り−生活費−住宅−保険）</span>
+      <span style="text-align:right">${planSaveY.toFixed(0)}</span>
+      <span style="text-align:right">${actSaveY.toFixed(0)}</span>
+      <span style="text-align:right;color:${actSaveY<planSaveY-6?"var(--neg)":"var(--pos)"}">${actSaveY-planSaveY>=0?"+":""}${(actSaveY-planSaveY).toFixed(0)}</span>
+    </div>
+    <p class="mini" style="margin-top:8px">※ 記録が少ない月があると年換算がぶれます。数ヶ月分の記録がたまってからの反映がおすすめです。</p>
+  </div>
+  <div class="card">
+    <h2>実績をプランに反映</h2>
+    <p class="hint">家計簿の実績（月平均）に合わせて、ライフプランの前提を更新します。反映前に確認画面が出ます。</p>
+    ${fitRow("生活費",plan.recur.living,avg.living,"living")}
+    ${fitRow("投資・貯蓄（毎月の積立）",plan.recur.invest,avg.invest,"invest")}
+    <p class="mini" style="margin-top:8px">収入・住宅・保険は昇給カーブやローン・契約内容など前提が複雑なため、下のボタンから該当画面で直接修正してください。</p>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+      <span class="mini" style="align-self:center">前提を見直す:</span>
+      <button class="btn ghost sm" data-jump="income">収入</button>
+      <button class="btn ghost sm" data-jump="expense">生活費・住宅・保険</button>
+      <button class="btn ghost sm" data-jump="assets">投資</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>今年の特別支出（イベント）</h2>
+    <p class="hint">車の買い替え・教育費・住宅メンテ・旅行などの、${year}年の年間プランと実績（1〜12月）です。単位：万円。</p>
+    ${eventCompareRows(plan.events,year,12)}
+  </div>`;
+  bindNav(); bindYjSeg();
+  el.querySelectorAll("[data-jump]").forEach(b=>b.onclick=()=>{ MODE="lifeplan"; pCur="plan"; planSub=b.dataset.jump; render(); window.scrollTo(0,0); });
+  el.querySelectorAll("[data-yjfit]").forEach(b=>b.onclick=async()=>{
+    const v=+b.dataset.val;
+    const prim=S.members.find(m=>m.role==="self")||S.members[0];
+    const age=ageInYear(prim,year);
+    if(b.dataset.yjfit==="living"){
+      const segL=S.living.find(s=>age>=s.from&&age<=s.to);
+      if(!segL){ alert("現在の年齢を含む生活費の設定が見つかりません。「前提の入力 > 生活費・支出」で確認してください。"); return; }
+      const ok=await askConfirm(`生活費プランを実績に合わせます。\n\n${segL.from}〜${segL.to}歳の生活費：月${segL.monthly}万円 → 月${v}万円\n\n※ この年齢期間ぜんぶのプランが変わります。`,"反映する");
+      if(ok){ segL.monthly=v; commit(); }
+    }else{
+      const list=(S.assets||[]).filter(a=>a.type==="invest"&&age<=(+a.accumEndAge||120));
+      if(!list.length){
+        const ok=await askConfirm(`積立中の投資・貯蓄プランがありません。\n\n新しく「積立（実績反映）」（利回り0%）を作成し、月${v}万円を積み立てる設定にしますか？\n利回りはあとから「前提の入力 > 資産」で変更できます。`,"作成する");
+        if(ok){ S.assets.push({id:uid(),name:"積立（実績反映）",type:"invest",balance:0,rate:0,monthly:v,accumEndAge:64,drawStartAge:65,drawMonthly:0}); commit(); }
+        return;
+      }
+      const target=list.reduce((m,a)=>(+a.monthly||0)>=(+m.monthly||0)?a:m,list[0]);
+      const others=list.reduce((s,a)=>s+(a===target?0:(+a.monthly||0)),0);
+      const nv=Math.max(0,Math.round((v-others)*10)/10);
+      const ok=await askConfirm(`毎月の積立プランを実績に合わせます。\n\n「${target.name}」の毎月積立：月${+target.monthly||0}万円 → 月${nv}万円\n（積立の合計を月${v}万円にします）`,"反映する");
+      if(ok){ target.monthly=nv; commit(); }
+    }
+  });
 }
 function eventCompareRows(events,year,uptoMonth){
   const ytd=cat=>E.filter(x=>!x.deleted&&x.kind==="expense"&&x.category===cat&&x.date>=year+"-01"&&x.date<=year+"-"+String(uptoMonth).padStart(2,"0")+"-31").reduce((s,x)=>s+x.amount,0)/10000;
