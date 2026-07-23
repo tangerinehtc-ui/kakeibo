@@ -115,12 +115,48 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 .tl-row.heavy .tl-year{color:var(--neg)}
 .tl-ev{display:inline-block;background:var(--chip);border-radius:6px;padding:2px 8px;font-size:12px;margin:2px 4px 2px 0}
 @media print{
-  header,nav,#gearBtn,.tools,#printBtn,#updBar,#storageWarn,#chatFab,#chatPanel{display:none !important}
+  header,nav,#gearBtn,.tools,#printBtn,#reportBtn,#updBar,#storageWarn,#chatFab,#chatPanel{display:none !important}
   main{padding:0;max-width:none}
   .card{border:1px solid #ccc;break-inside:avoid;box-shadow:none}
   .chip:not(.on){display:none}
   body{background:#fff}
 }
+/* ---- FP相談用レポート（印刷専用ビュー） ---- */
+#reportView{display:none}
+@media print{
+  body.printing-report main,body.printing-report header,body.printing-report nav,body.printing-report #updBar,body.printing-report #storageWarn{display:none !important}
+  body.printing-report #reportView{display:block}
+  #reportView .rpage{page-break-after:always}
+  #reportView .rpage:last-child{page-break-after:auto}
+  #reportView table{break-inside:auto}
+  #reportView tr{break-inside:avoid}
+}
+#reportView{
+  /* 画面がダークテーマでも印刷は必ず白地・黒字にする */
+  --bg:#fff;--card:#fff;--ink:#1c1c1a;--sub:#666;--line:#c9c9c2;--chip:#f0f0ea;
+  --accent:#2f7d6b;--accent2:#3a6ea5;--warn:#b34528;--pos:#2f7d6b;--neg:#b34528;
+  color:#1c1c1a;background:#fff;font-size:12px;line-height:1.55;max-width:186mm;margin:0 auto;
+}
+#reportView .rpt-title{font-size:21px;font-weight:700;margin:0 0 2px;border-bottom:3px solid var(--accent);padding-bottom:6px}
+#reportView .rpt-sub{color:#666;font-size:11px;margin:4px 0 14px}
+#reportView h3{font-size:14px;margin:16px 0 6px;padding:3px 8px;background:#f0f0ea;border-left:4px solid var(--accent)}
+#reportView table.rpt{width:100%;border-collapse:collapse;font-size:11px}
+#reportView table.rpt th,#reportView table.rpt td{border:1px solid #c9c9c2;padding:3px 6px;text-align:right;color:#1c1c1a}
+#reportView table.rpt th{background:#f0f0ea;font-weight:600;text-align:center}
+#reportView table.rpt td:first-child,#reportView table.rpt th:first-child{text-align:left}
+#reportView table.rpt td.neg{color:#b34528}
+#reportView table.rpt td.negbg{background:#fbe6df}
+#reportView table.rpt tr.r5 td{background:#f7f7f2}
+#reportView table.rpt tr.r5 td.negbg{background:#fbe6df}
+#reportView .rpt-note{font-size:10px;color:#666;margin:4px 0 0}
+#reportView .rpt-box{border:1.5px solid var(--accent);border-radius:8px;padding:10px 12px;margin:12px 0;font-size:11.5px}
+#reportView .rpt-memo{border-bottom:1px dashed #aaa;height:26px}
+#reportView .rpt-kpis{display:flex;gap:10px;margin:8px 0}
+#reportView .rpt-kpi{flex:1;border:1px solid #c9c9c2;border-radius:8px;padding:8px 10px}
+#reportView .rpt-kpi .l{font-size:10px;color:#666}
+#reportView .rpt-kpi .v{font-size:16px;font-weight:700}
+#reportView svg text{fill:#666}
+#reportView .legend{font-size:10px;color:#444}
 @media(max-width:600px){ main{padding:10px 10px calc(90px + env(safe-area-inset-bottom,0px))} .card{padding:12px} }
 /* ライフプラン診断 */
 .diag-badge{display:flex;align-items:center;gap:14px;margin-bottom:6px}
@@ -209,7 +245,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 
 <script>
 "use strict";
-const APP_VERSION = "2026.07.20-23";
+const APP_VERSION = "2026.07.20-24";
 const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
 
 /* ========================================================================
@@ -1114,13 +1150,15 @@ function renderAnalysis(){
   const SC=[["normal","通常プラン"],["death","万一（死亡）"],["disable","働けなくなった場合"]];
   el.innerHTML=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 10px">
     <div class="chips" style="flex:1">${SUBS.map(([id,l])=>`<button class="chip ${anaSub===id?"on":""}" data-as="${id}">${l}</button>`).join("")}</div>
-    <button class="btn ghost sm" id="printBtn">印刷 / PDF保存</button>
+    <button class="btn sm" id="reportBtn">📄 相談用レポート</button>
+    <button class="btn ghost sm" id="printBtn">この画面を印刷</button>
   </div>
   ${showScen?`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 14px"><span class="mini">表示する想定:</span><div class="chips">${SC.map(([id,l])=>`<button class="chip ${anaScen===id?"on":""}" data-scen="${id}">${l}</button>`).join("")}</div></div>`:""}
   <div id="anaBody"></div>`;
   el.querySelectorAll("[data-as]").forEach(b=>b.onclick=()=>{ anaSub=b.dataset.as; render(); });
   el.querySelectorAll("[data-scen]").forEach(b=>b.onclick=()=>{ anaScen=b.dataset.scen; render(); });
   document.getElementById("printBtn").onclick=()=>window.print();
+  document.getElementById("reportBtn").onclick=printReport;
   const scen=showScen?anaScen:"normal";
   const opt=scen!=="normal"?emgOptFor(scen):undefined;
   if(anaSub==="cf") renderCF(opt,scen);
@@ -2116,6 +2154,176 @@ function stackedExpense(rows){
   return `<svg width="${w}" height="${h}" role="img" style="max-width:none">${grid}${bars}<text x="${pad.l}" y="${h-6}" font-size="11" fill="var(--sub)">（本人年齢・万円/年）</text></svg>`;
 }
 
+/* ========== FP相談用レポート（印刷・PDF） ========== */
+// チャートSVGを印刷幅に合わせて縮む形へ変換（viewBox化）
+function fitSvg(html){
+  return html.replace(/<svg width="([\d.]+)" height="([\d.]+)"([^>]*?)style="max-width:none"/g,
+    '<svg viewBox="0 0 $1 $2"$3style="width:100%;height:auto;max-height:300px"');
+}
+// 印刷向けキャッシュフロー表（年を行に。A4縦に収まる列構成）
+function reportCfTable(rows){
+  const mems=S.members;
+  const roleL=m=>m.role==="self"?"本人":m.role==="spouse"?"配偶者":m.name;
+  const head=`<tr><th>年</th><th>年齢<br><span style="font-size:9px;font-weight:400">(${mems.map(roleL).join("/")})</span></th>
+    <th>収入合計<br><span style="font-size:9px;font-weight:400">(額面)</span></th><th>生活費</th><th>住宅費</th><th>教育・結婚</th><th>保険料</th><th>税・社保</th><th>その他</th><th>支出合計</th><th>収支</th><th>資産残高</th></tr>`;
+  const body=rows.map((r,i)=>{
+    const ages=mems.map(m=>{ const a=r.ages[m.id]; return (a>=0&&a<=(+m.lifespan||120))?a:"−"; }).join("/");
+    const misc=r.expenseTotal-(r.living+r.housing+r.education+r.insurance+r.tax);
+    const yneg=r.netWorth<0;
+    return `<tr${i%5===4?' class="r5"':""}><td>${r.year}</td><td style="text-align:center">${ages}</td>
+      <td>${MAN(r.incomeTotal)}</td><td>${MAN(r.living)}</td><td>${MAN(r.housing)}</td><td>${MAN(r.education)}</td><td>${MAN(r.insurance)}</td><td>${MAN(r.tax)}</td><td>${MAN(misc)}</td><td>${MAN(r.expenseTotal)}</td>
+      <td class="${r.balance<0?"neg":""}">${MAN(r.balance)}</td><td class="${yneg?"neg negbg":""}">${MAN(r.netWorth)}</td></tr>`;
+  }).join("");
+  return `<table class="rpt"><thead>${head}</thead><tbody>${body}</tbody></table>
+  <p class="rpt-note">単位：万円。収入は額面（税込）で、税金・社会保険料は「税・社保」列で控除しています。「その他」は車両・家電買替・住宅ローン控除・節約反映などの合計。資産残高＝現金＋投資。</p>`;
+}
+function buildReportHtml(){
+  const cf=computeCF();
+  const {rows,sched}=cf;
+  const esc=t=>String(t||"").replace(/</g,"&lt;");
+  const self=S.members.find(m=>m.role==="self")||S.members[0];
+  const roleL=m=>m.role==="self"?"本人":m.role==="spouse"?"配偶者":"子";
+  const act=(S.scenarios||[]).find(x=>x.id===S.activeScenarioId);
+  const today=new Date();
+  const dateStr=`${today.getFullYear()}年${today.getMonth()+1}月${today.getDate()}日`;
+  const th=c=>`<th>${c}</th>`, td=(c,al)=>`<td${al?` style="text-align:${al}"`:""}>${c}</td>`;
+
+  // --- 前提条件 ---
+  const famRows=S.members.map(m=>`<tr>${td(roleL(m),"left")}${td(esc(m.name),"left")}${td(m.birthYear+"年")}${td((S.baseYear-m.birthYear)+"歳")}</tr>`).join("");
+  const incRows=S.incomes.map(inc=>{
+    const m=member(inc.memberId); if(!m) return "";
+    const a=S.baseYear-m.birthYear;
+    if(inc.type==="salary"){
+      const g=salaryAt(inc,a);
+      return `<tr>${td(esc(m.name),"left")}${td("給与（額面）","left")}${td(MAN(g)+"万円/年")}${td("手取り 約"+MAN(g-taxOn(g))+"万円")}${td(inc.endAge+"歳まで")}</tr>`;
+    }
+    if(inc.type==="pension") return `<tr>${td(esc(m.name),"left")}${td("公的年金","left")}${td(MAN(inc.annual)+"万円/年")}${td("−")}${td((+inc.claimAge||65)+"歳から")}</tr>`;
+    return `<tr>${td(esc(m.name),"left")}${td("その他","left")}${td(MAN(inc.annual||inc.amount||0)+"万円")}${td("−")}${td("−")}</tr>`;
+  }).join("");
+  const livRows=S.living.map(sg=>`<tr>${td(sg.from+"〜"+sg.to+"歳","left")}${td("月 "+sg.monthly+"万円")}${td("年 "+MAN(sg.monthly*12)+"万円")}</tr>`).join("");
+  const loan=S.housing.loan;
+  const houseRows=[
+    ...S.housing.rent.filter(r=>+r.monthly>0).map(r=>`<tr>${td("家賃","left")}${td(r.fromYear+"〜"+r.toYear+"年","left")}${td("月 "+r.monthly+"万円")}</tr>`),
+    ...(loan&&loan.on?[`<tr>${td("住宅ローン","left")}${td(loan.startYear+"年〜 借入 "+MAN(loan.principal)+"万円・金利 "+loan.rate+"%・"+loan.termYears+"年","left")}${td("完済 "+sched.payoffYear+"年")}</tr>`]:[]),
+    ...S.housing.maintenance.filter(mt=>+mt.annual>0).map(mt=>`<tr>${td(esc(mt.name),"left")}${td(mt.fromAge+"〜"+mt.toAge+"歳・"+(+mt.cycle>1?mt.cycle+"年ごと":"毎年"),"left")}${td(MAN(mt.annual)+"万円")}</tr>`)
+  ].join("");
+  const eduRows=S.members.filter(m=>m.role==="child").map(c=>{
+    const ed=S.educations.find(e=>e.childId===c.id);
+    const course=ed?Object.values(ed.choices||{}).filter(Boolean).join(" → "):"未設定";
+    return `<tr>${td(esc(c.name),"left")}${td(esc(course),"left")}${td(ed?("独立 "+(+ed.independentAge||22)+"歳"):"−")}</tr>`;
+  }).join("");
+  const cevRows=(S.childEvents||[]).map(ev=>{ const c=member(ev.childId); return c?`<tr>${td(esc(c.name),"left")}${td(esc(ev.name),"left")}${td(MAN(ev.amount)+"万円（"+ev.age+"歳）")}</tr>`:""; }).join("");
+  const expRows=S.expenses.filter(e=>+e.amount>0).map(e=>{
+    return `<tr>${td(esc(e.name),"left")}${td(esc(e.category),"left")}${td(MAN(e.amount)+"万円")}${td(e.fromAge+"〜"+e.toAge+"歳・"+(+e.cycle>1?e.cycle+"年ごと":"毎年"))}</tr>`;
+  }).join("");
+  const astRows=S.assets.map(a=>a.type==="invest"
+    ?`<tr>${td(esc(a.name),"left")}${td("投資","left")}${td(MAN(a.balance)+"万円")}${td("利回り "+(+a.rate||0)+"%・積立 月"+(+a.monthly||0)+"万円（"+(+a.accumEndAge||64)+"歳まで）","left")}</tr>`
+    :`<tr>${td(esc(a.name),"left")}${td("現金・預金","left")}${td(MAN(a.balance)+"万円")}${td("金利 "+(+a.rate||0)+"%","left")}</tr>`).join("");
+  const insDesc=p=>{
+    if(p.type==="life") return "死亡保険金 "+MAN(p.amount)+"万円";
+    if(p.type==="medical") return "入院日額 "+(+p.daily||0)+"万円・手術 "+MAN(p.surgery)+"万円";
+    if(p.type==="cancer") return "診断一時金 "+MAN(p.lump)+"万円";
+    if(p.type==="disability") return "月額給付 "+(+p.monthly||0)+"万円（免責"+(+p.waitMonths||0)+"ヶ月）";
+    if(p.type==="pension_edu") return MAN(p.payout)+"万円/年 × "+(+p.payYears||1)+"年（"+(+p.payAge||0)+"歳〜）";
+    return "";
+  };
+  const insRows=(S.insurances||[]).map(p=>{
+    const m=member(p.memberId);
+    const typeL=(INS_TYPES[p.type]||{}).label||p.type;
+    const until=p.type==="pension_edu"?("払込 〜"+(+p.premiumToAge||100)+"歳"):("〜"+(+p.toAge||100)+"歳");
+    return `<tr>${td(esc(p.name)+(p.status==="candidate"?' <span style="color:#3a6ea5">[検討中]</span>':""),"left")}${td(typeL,"left")}${td(m?esc(m.name):"−","left")}${td(insDesc(p),"left")}${td((+p.premium||0)+"万円/年")}${td(until)}</tr>`;
+  }).join("");
+
+  // --- 診断 ---
+  const r65=rows.find(r=>r.primAge===65)||rows[rows.length-1];
+  const last=rows[rows.length-1];
+  const firstNeg=rows.find(r=>r.netWorth<0);
+  const {items}=emgSummaryItems();
+  const prem=insPremiumNow();
+  const ic=st=>st==="good"?"◎":st==="warn"?"⚠":"△";
+  const icCol=st=>st==="good"?"#2f7d6b":st==="warn"?"#b34528":"#3a6ea5";
+
+  // --- 年表 ---
+  const evByYear=collectTimelineEvents(cf,"normal");
+  const evYears=Object.keys(evByYear).map(Number).filter(y=>y>=S.baseYear).sort((a,b)=>a-b);
+  const tlRows=evYears.map(y=>{
+    const r=rows.find(x=>x.year===y);
+    return `<tr${r&&r.balance<0?' style="background:#fbe6df"':""}>${td(y+"年","left")}${td(r?r.primAge+"歳":"−")}${td(evByYear[y].map(esc).join("　"),"left")}</tr>`;
+  }).join("");
+
+  return `
+  <div class="rpage">
+    <div class="rpt-title">ライフプラン シミュレーションレポート</div>
+    <div class="rpt-sub">作成日：${dateStr}　／　プラン：${esc(act?act.name:"現在のプラン")}　／　基準年：${S.baseYear}年${+S.inflation>0?`　／　物価上昇率：${S.inflation}%/年`:""}</div>
+    <div class="rpt-box"><b>このレポートについて</b><br>
+    家計の前提条件と、${last.year}年（${esc(self.name)}様 ${last.primAge}歳）までのキャッシュフロー試算をまとめたものです。
+    FP・保険・住宅ローン・資産運用などのご相談の際にこのままお見せいただくと、家族構成・収支・保険の加入状況の説明が省略でき、スムーズに相談を始められます。</div>
+    <h3>1. 家族構成</h3>
+    <table class="rpt"><thead><tr>${th("続柄")}${th("名前")}${th("生年")}${th("現在年齢")}</tr></thead><tbody>${famRows}</tbody></table>
+    <h3>2. 収入の前提</h3>
+    <table class="rpt"><thead><tr>${th("対象")}${th("種類")}${th("現在の金額")}${th("参考")}${th("期間")}</tr></thead><tbody>${incRows}</tbody></table>
+    <p class="rpt-note">給与は昇給カーブを設定しており、上表は現在年齢時点の金額です。推移はキャッシュフロー表をご覧ください。</p>
+    <h3>3. 生活費の前提</h3>
+    <table class="rpt"><thead><tr>${th("期間（本人年齢）")}${th("月額")}${th("年額")}</tr></thead><tbody>${livRows}</tbody></table>
+    <h3>4. 住まいの前提</h3>
+    <table class="rpt"><thead><tr>${th("項目")}${th("内容")}${th("金額")}</tr></thead><tbody>${houseRows||`<tr><td colspan="3">設定なし</td></tr>`}</tbody></table>
+    <h3>5. 教育の前提</h3>
+    <table class="rpt"><thead><tr>${th("子")}${th("進路（想定）")}${th("備考")}</tr></thead><tbody>${eduRows||`<tr><td colspan="3">設定なし</td></tr>`}</tbody></table>
+    ${cevRows?`<p class="rpt-note" style="margin-top:6px">一時費用の想定：</p><table class="rpt"><thead><tr>${th("子")}${th("項目")}${th("金額（年齢）")}</tr></thead><tbody>${cevRows}</tbody></table>`:""}
+    <h3>6. 車・大型支出の前提</h3>
+    <table class="rpt"><thead><tr>${th("項目")}${th("分類")}${th("金額")}${th("時期・周期")}</tr></thead><tbody>${expRows||`<tr><td colspan="4">設定なし</td></tr>`}</tbody></table>
+    <h3>7. 資産の前提</h3>
+    <table class="rpt"><thead><tr>${th("名称")}${th("種類")}${th("現在残高")}${th("運用条件")}</tr></thead><tbody>${astRows}</tbody></table>
+    <h3>8. 加入中・検討中の保険</h3>
+    <table class="rpt"><thead><tr>${th("名称")}${th("種類")}${th("被保険者")}${th("主な保障")}${th("保険料")}${th("保障期間")}</tr></thead><tbody>${insRows||`<tr><td colspan="6">登録なし</td></tr>`}</tbody></table>
+    <p class="rpt-note">年間保険料 合計 ${prem.toFixed(1)}万円（加入中の分）</p>
+  </div>
+  <div class="rpage">
+    <h3>9. シミュレーション結果の要点</h3>
+    <div class="rpt-kpis">
+      <div class="rpt-kpi"><div class="l">65歳時点の資産</div><div class="v"${r65.netWorth<0?' style="color:#b34528"':""}>${MAN(r65.netWorth)}万円</div></div>
+      <div class="rpt-kpi"><div class="l">${last.primAge}歳時点（最終）の資産</div><div class="v"${last.netWorth<0?' style="color:#b34528"':""}>${MAN(last.netWorth)}万円</div></div>
+      <div class="rpt-kpi"><div class="l">資産がマイナスになる年</div><div class="v">${firstNeg?`<span style="color:#b34528">${firstNeg.year}年（${firstNeg.primAge}歳）</span>`:"なし"}</div></div>
+    </div>
+    <h3>10. 保障の過不足（アプリ内の概算診断）</h3>
+    <table class="rpt"><thead><tr>${th("項目")}${th("判定")}${th("内容")}</tr></thead><tbody>
+      ${items.map(x=>`<tr>${td(esc(x.k),"left")}${td(`<span style="color:${icCol(x.st)};font-weight:700">${ic(x.st)}</span>`)}${td(esc(x.msg),"left")}</tr>`).join("")}
+    </tbody></table>
+    <p class="rpt-note">⚠＝不足の可能性、◎＝充足、△＝払いすぎ（見直し余地）の可能性。公的保障（遺族年金・障害年金・高額療養費）を織り込んだ概算です。</p>
+    <h3>11. 相談で確認したいこと（メモ）</h3>
+    <div class="rpt-memo"></div><div class="rpt-memo"></div><div class="rpt-memo"></div><div class="rpt-memo"></div><div class="rpt-memo"></div>
+  </div>
+  <div class="rpage">
+    <h3>12. 資産残高の推移</h3>
+    ${fitSvg(lineChart(rows))}
+    <h3>13. 年度別の収支差額</h3>
+    ${fitSvg(balanceBars(rows))}
+    <div class="legend"><span>■黒字　</span><span style="color:#b34528">■赤字</span></div>
+    <h3>14. 支出の内訳（5年ごと）</h3>
+    ${fitSvg(stackedExpense(rows))}
+    <div class="legend">${["生活費#4fb39a","住宅費#6ba0d8","教育#e0a13a","車両#c07f5c","家電#7fb069","その他#9b8bd0","税・社保#8a8a80","保険#d47ba0"].map(x=>{const[n,c]=x.split("#");return `<span style="margin-right:8px"><span style="color:#${c}">■</span>${n}</span>`;}).join("")}</div>
+  </div>
+  <div class="rpage">
+    <h3>15. キャッシュフロー表（年次）</h3>
+    ${reportCfTable(rows)}
+  </div>
+  <div class="rpage">
+    <h3>16. ライフイベント年表</h3>
+    <table class="rpt"><thead><tr>${th("年")}${th("年齢")}${th("主な出来事")}</tr></thead><tbody>${tlRows||`<tr><td colspan="3">イベントなし</td></tr>`}</tbody></table>
+    <p class="rpt-note">背景が赤い年は、その年の収支が赤字（支出＞収入）の試算です。</p>
+    <p class="rpt-note" style="margin-top:14px">【免責事項】本レポートは「家計簿×ライフプラン」アプリによる簡易シミュレーションです。税金・社会保険・年金・住宅ローン・保険の金額は概算であり、実際の金額・受給額・契約内容とは異なる場合があります。数値は将来の成果を保証するものではありません。具体的な契約・受給額は各機関・保険会社にご確認ください。</p>
+  </div>`;
+}
+function printReport(){
+  let rv=document.getElementById("reportView");
+  if(!rv){ rv=document.createElement("div"); rv.id="reportView"; document.body.appendChild(rv); }
+  rv.innerHTML=buildReportHtml();
+  document.body.classList.add("printing-report");
+  const done=()=>{ document.body.classList.remove("printing-report"); window.removeEventListener("afterprint",done); };
+  window.addEventListener("afterprint",done);
+  setTimeout(()=>window.print(),30);
+}
+
 /* ========== 予実チェック ========== */
 // ある年の「月次プラン（万円/月）」を経常項目とイベントに分けて返す
 function monthlyPlan(year){
@@ -2449,9 +2657,8 @@ function scenarioChart(baseRows, others){
 }
 
 /* ========== ライフイベント年表 ========== */
-function renderTimeline(opt,scen){
-  const el=document.getElementById("anaBody");
-  const cf=computeCF(opt);
+// 年表イベントの収集（画面の年表とFP相談用レポートで共用）
+function collectTimelineEvents(cf,scen){
   const {rows,prim,assetInfo,sched}=cf;
   const evByYear={};
   const add=(year,txt)=>{ if(!year) return; (evByYear[year]=evByYear[year]||[]).push(txt); };
@@ -2497,6 +2704,13 @@ function renderTimeline(opt,scen){
   });
   // 投資枯渇
   (assetInfo||[]).forEach(x=>{ if(x.depleteYear) add(x.depleteYear,`投資「${x.name}」枯渇`); });
+  return evByYear;
+}
+function renderTimeline(opt,scen){
+  const el=document.getElementById("anaBody");
+  const cf=computeCF(opt);
+  const {rows}=cf;
+  const evByYear=collectTimelineEvents(cf,scen);
   const years=Object.keys(evByYear).map(Number).filter(y=>y>=S.baseYear).sort((a,b)=>a-b);
   el.innerHTML=`
   ${scenBanner(scen)}
@@ -2816,8 +3030,8 @@ function renderEmgDisable(){
   bindEmgJump(el);
 }
 /* --- 保険の見直しサマリー --- */
-function renderEmgSummary(){
-  const el=document.getElementById("emgBody");
+// 保障の過不足の診断項目（もしもの備えサマリーとFP相談用レポートで共用）
+function emgSummaryItems(){
   const em=S.emergency;
   const self=S.members.find(m=>m.role==="self")||S.members[0];
   const spouse=S.members.find(m=>m.role==="spouse");
@@ -2863,6 +3077,11 @@ function renderEmgSummary(){
     const add=(cand&&curMC>curM)?(needM>0&&curMC>=needM?`検討中を追加すると 月${curMC}万円 → 充足 ✓`:`検討中を追加すると 月${curMC}万円`):null;
     push("就業不能保障（本人）",st,msg,add);
   }
+  return {items,cand};
+}
+function renderEmgSummary(){
+  const el=document.getElementById("emgBody");
+  const {items,cand}=emgSummaryItems();
   const prem=insPremiumNow();
   const ic=st=>st==="good"?'<span class="ic good" style="color:var(--pos)">◎</span>':st==="warn"?'<span class="ic warn" style="color:var(--neg)">⚠</span>':'<span class="ic" style="color:var(--accent2)">△</span>';
   el.innerHTML=`
@@ -2879,11 +3098,14 @@ function renderEmgSummary(){
         ${short.length?`<p class="mini">「<b>${short.join("・")}</b>」に不足の可能性があります。`:`<p class="mini">「<b>${over.join("・")}</b>」は保険料を払いすぎている可能性があります。`}
         必要な保障は家族構成や働き方で変わるため、自分に合う形を専門家に相談してみるのも一つの方法です。</p>
         <div style="margin-top:8px">${affLinkHtml(SAVE_LINKS.hoken)}</div>
+        <p class="mini" style="margin-top:8px">💡 相談の際は、<b>このプランのレポート</b>を印刷（またはPDF保存）して持参すると、家族構成・収支・保険の加入状況の説明が省けてスムーズです。</p>
+        <button class="btn ghost sm" id="emgReportBtn" style="margin-top:4px">📄 相談用レポートを印刷 / PDF保存</button>
         <p class="mini" style="margin-top:6px;color:var(--sub)">※ このアプリは特定の保険商品をおすすめするものではありません。加入・見直しはご自身の判断で行ってください。</p>
       </div>`;
     })()}
     <p class="mini" style="margin-top:10px">この一覧はアプリ内の概算によるものです。実際の契約・受給額は保険会社・年金事務所にご確認ください。保険の登録・変更は「前提の入力 → 保険」から。</p>
   </div>`;
+  const rb=document.getElementById("emgReportBtn"); if(rb) rb.onclick=printReport;
 }
 
 /* ========== 家計簿（実績）データ ========== */
