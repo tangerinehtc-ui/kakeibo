@@ -250,7 +250,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 
 <script>
 "use strict";
-const APP_VERSION = "2026.07.20-30";
+const APP_VERSION = "2026.07.20-31";
 const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
 
 /* ========================================================================
@@ -4690,14 +4690,30 @@ function parseCSV(text){
   row.push(cell); if(row.some(c=>c!=="")) rows.push(row);
   return rows;
 }
-function parseDateCell(s){
+// 日付セルの解釈。ym（"YYYY-MM"）を渡すと「日だけ」「M/D」の表記も補完できる
+function parseDateCell(s, ym){
   if(s==null) return null;
   s=String(s).trim().replace(/[年月]/g,"/").replace(/日/g,"");
-  const m=s.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
-  if(!m) return null;
-  const mo=+m[2], d=+m[3];
-  if(mo<1||mo>12||d<1||d>31) return null;
-  return m[1]+"-"+String(mo).padStart(2,"0")+"-"+String(d).padStart(2,"0");
+  const mk=(y,mo,d)=>(mo<1||mo>12||d<1||d>31)?null:y+"-"+String(mo).padStart(2,"0")+"-"+String(d).padStart(2,"0");
+  let m=s.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
+  if(m) return mk(m[1],+m[2],+m[3]);
+  if(ym){
+    const [yy,mm]=ym.split("-");
+    m=s.match(/^(\d{1,2})[\/\-\.](\d{1,2})$/);          // 「5/12」→ ファイルの年を使う
+    if(m) return mk(yy,+m[1],+m[2]);
+    m=s.match(/^(\d{1,2})$/);                            // 「12」→ ファイルの年月を使う
+    if(m) return mk(yy,+mm,+m[1]);
+  }
+  return null;
+}
+// ファイル名から年月を推測（例: 2026年5月.csv / 2026-05.csv / 家計簿202605.csv）
+function ymFromName(name){
+  const s=String(name||"").replace(/\.[^.]+$/,"");
+  let m=s.match(/(20\d{2})\s*[年\-_\/\.]?\s*(\d{1,2})(?!\d)/);
+  if(m&&+m[2]>=1&&+m[2]<=12) return m[1]+"-"+String(+m[2]).padStart(2,"0");
+  m=s.match(/(20\d{2})(\d{2})/);
+  if(m&&+m[2]>=1&&+m[2]<=12) return m[1]+"-"+m[2];
+  return "";
 }
 function parseAmount(s){
   if(s==null) return null;
@@ -4705,83 +4721,194 @@ function parseAmount(s){
   if(t===""||isNaN(+t)) return null;
   return +t;
 }
-let kImportRows=null, kImportName="";
-function buildImportRows(rows){
-  if(!rows||!rows.length) return [];
-  const KW_DATE=/日付|利用日|取引日|年月日|ご利用日|お取引日/;
-  const KW_PAY=/出金|利用金額|支払金額|支払額|引落|お引出し|金額/;
-  const KW_IN=/入金|預入|お預入/;
-  const KW_MEMO=/店名|摘要|内容|備考|名称|利用店|お取り扱い/;
-  let hi=-1;
-  for(let i=0;i<Math.min(rows.length,10);i++) if(rows[i].some(c=>KW_DATE.test(c||""))){ hi=i; break; }
-  let dateCol=-1,payCol=-1,inCol=-1,memoCol=-1;
-  if(hi>=0){
-    rows[hi].forEach((c,j)=>{ c=c||"";
-      if(dateCol<0&&KW_DATE.test(c)) dateCol=j;
-      if(inCol<0&&KW_IN.test(c)) inCol=j;
-      if(memoCol<0&&KW_MEMO.test(c)) memoCol=j;
+/* ---------- CSV取り込み（家計簿アプリ・自作Excel・銀行カード明細に対応） ---------- */
+// kImp: 取り込み作業中の状態。複数ファイルをまとめて扱い、列の対応は全ファイル共通で適用する
+let kImp=null;
+const CATMAP_KEY="kakeibo_catmap_v1";
+let CATMAP=(function(){ try{ const r=localStorage.getItem(CATMAP_KEY); if(r) return JSON.parse(r); }catch(e){} return {}; })();
+function saveCatMap(){ try{ localStorage.setItem(CATMAP_KEY,JSON.stringify(CATMAP)); }catch(e){} }
+const IMP_KW={
+  date:/日付|利用日|取引日|年月日|ご利用日|お取引日|^日$/,
+  pay:/支出|出金|利用金額|支払金額|支払額|引落|お引出し|金額/,
+  income:/収入|入金|預入|お預入/,
+  memo:/品目|店名|摘要|内容|備考|名称|利用店|お取り扱い|メモ/,
+  cat:/カテゴリ|大項目|費目|分類|科目|項目/
+};
+// 1ファイル分の生データから、見出し行と列の候補を推定する
+function detectMapping(rows){
+  const map={header:-1,date:-1,pay:-1,income:-1,memo:-1,cat:-1};
+  for(let i=0;i<Math.min(rows.length,10);i++){
+    if(rows[i].some(c=>IMP_KW.date.test(String(c||"").trim()))){ map.header=i; break; }
+  }
+  if(map.header>=0){
+    const h=rows[map.header].map(c=>String(c||"").trim());
+    h.forEach((c,j)=>{
+      if(map.date<0&&IMP_KW.date.test(c)) map.date=j;
+      if(map.income<0&&IMP_KW.income.test(c)) map.income=j;
+      if(map.memo<0&&IMP_KW.memo.test(c)) map.memo=j;
+      if(map.cat<0&&IMP_KW.cat.test(c)) map.cat=j;
     });
-    rows[hi].forEach((c,j)=>{ c=c||""; if(payCol<0&&j!==inCol&&KW_PAY.test(c)) payCol=j; });
+    h.forEach((c,j)=>{ if(map.pay<0&&j!==map.income&&j!==map.cat&&IMP_KW.pay.test(c)) map.pay=j; });
   }
-  const data=rows.slice(hi+1);
+  const data=rows.slice(map.header+1);
   const sample=data.slice(0,30);
-  const width=Math.max(0,...sample.map(r=>r.length));
-  if(dateCol<0){ let best=-1,bc=0; for(let j=0;j<width;j++){ const c=sample.filter(r=>parseDateCell(r[j])).length; if(c>bc){bc=c;best=j;} } dateCol=best; }
-  if(dateCol<0) return [];
-  // 見出しから選んだ金額列が実際には数値でない場合は選び直す（「支払方法」等の誤検出対策）
-  const numRate=j=>{ if(j<0) return 0; const n=sample.filter(r=>{const v=parseAmount(r[j]);return v!==null&&v!==0;}).length; return sample.length?n/sample.length:0; };
-  if(payCol>=0 && numRate(payCol)===0) payCol=-1;
-  if(inCol>=0 && numRate(inCol)===0) inCol=-1;
-  if(payCol<0){ let best=-1,bc=0;
-    for(let j=0;j<width;j++){ if(j===dateCol) continue;
-      const c=sample.filter(r=>{const v=parseAmount(r[j]);return v!==null&&v!==0;}).length;
-      if(c>=bc&&c>0){bc=c;best=j;} }
-    payCol=best;
+  const width=Math.max(0,...rows.map(r=>r.length));
+  const numRate=j=>{ if(j<0||!sample.length) return 0;
+    return sample.filter(r=>{const v=parseAmount(r[j]); return v!==null&&v!==0;}).length/sample.length; };
+  // 見出しから選んだ金額列が数値でなければ選び直す（「支払方法」等の誤検出対策）
+  if(map.pay>=0&&numRate(map.pay)===0) map.pay=-1;
+  if(map.income>=0&&numRate(map.income)===0) map.income=-1;
+  if(map.date<0){ let best=-1,bc=0;
+    for(let j=0;j<width;j++){ const c=sample.filter(r=>parseDateCell(r[j],"2000-01")).length; if(c>bc){bc=c;best=j;} }
+    map.date=best;
   }
-  if(payCol<0) return [];
-  if(memoCol<0){ let best=-1,bl=0;
-    for(let j=0;j<width;j++){ if(j===dateCol||j===payCol||j===inCol) continue;
+  if(map.pay<0){ let best=-1,bc=0;
+    for(let j=0;j<width;j++){ if(j===map.date||j===map.income) continue;
+      const c=sample.filter(r=>{const v=parseAmount(r[j]); return v!==null&&v!==0;}).length;
+      if(c>=bc&&c>0){bc=c;best=j;} }
+    map.pay=best;
+  }
+  if(map.memo<0){ let best=-1,bl=0;
+    for(let j=0;j<width;j++){ if(j===map.date||j===map.pay||j===map.income||j===map.cat) continue;
       const l=sample.reduce((s,r)=>s+String(r[j]||"").replace(/[\d,.\-\/]/g,"").length,0);
       if(l>bl){bl=l;best=j;} }
-    memoCol=best;
+    map.memo=best;
   }
-  const out=[];
-  data.forEach(r=>{
-    const date=parseDateCell(r[dateCol]); if(!date) return;
-    let amount=null, kind="expense";
-    const inV=inCol>=0?parseAmount(r[inCol]):null;
-    const payV=parseAmount(r[payCol]);
-    if(inV){ amount=inV; kind="income"; }
-    else if(payV){ amount=payV; kind="expense"; }
-    if(amount==null||amount===0) return;
-    if(amount<0){ amount=-amount; kind=(kind==="expense")?"income":"expense"; }
-    amount=Math.round(amount);
-    const memo=String(memoCol>=0?(r[memoCol]||""):"").trim();
-    const dup=E.some(x=>!x.deleted&&x.date===date&&x.amount===amount&&(x.memo||"")===memo);
-    const category=guessCategory(memo,kind);
-    out.push({date,memo,amount,kind,category,guess:category,dup,include:!dup});
+  return map;
+}
+// マネーフォワード等の「計算対象=0」「振替」行は取り込まない
+function impSkipRow(header,r){
+  const idx=header.findIndex(c=>/計算対象/.test(String(c||"")));
+  if(idx>=0 && String(r[idx]||"").trim()==="0") return true;
+  return r.some(c=>/^振替$/.test(String(c||"").trim()));
+}
+// 収入とみなす費目名（1列に収支が混ざる家計簿で使う）
+const IMP_INCOME_CAT=/^(収入|給与|給料|賞与|ボーナス|副収入|臨時収入|年金|入金)/;
+function impIsIncomeCat(rawCat){
+  if(!rawCat) return false;
+  if(S.kakeibo&&S.kakeibo.cats&&S.kakeibo.cats.income.some(c=>c.name===rawCat)) return true;
+  return IMP_INCOME_CAT.test(rawCat);
+}
+// 取り込み対象の明細行を組み立てる（全ファイル分）
+function impBuildRows(){
+  if(!kImp) return [];
+  const m=kImp.map, out=[];
+  // 金額が1列だけのとき、マイナスが混ざっていれば「マイナス＝支出／プラス＝収入」と解釈する
+  // （すべてプラスの家計簿は、金額列＝支出とみなす）
+  let signed=false;
+  if(m.income<0&&m.pay>=0){
+    for(const f of kImp.files){
+      const data=f.rows.slice((m.header>=0?m.header:-1)+1);
+      if(data.some(r=>{ const v=parseAmount(r[m.pay]); return v!==null&&v<0; })){ signed=true; break; }
+    }
+  }
+  kImp.signed=signed;
+  kImp.files.forEach(f=>{
+    const header=f.rows[m.header>=0?m.header:0]||[];
+    f.rows.slice((m.header>=0?m.header:-1)+1).forEach(r=>{
+      if(impSkipRow(header,r)) return;
+      const date=parseDateCell(r[m.date],f.ym);
+      if(!date) return;
+      const rawCat=String(m.cat>=0?(r[m.cat]||""):"").trim();
+      let amount=null, kind="expense";
+      const inV=m.income>=0?parseAmount(r[m.income]):null;
+      const payV=m.pay>=0?parseAmount(r[m.pay]):null;
+      if(inV){ amount=inV; kind="income"; }
+      else if(payV!=null&&payV!==0){
+        amount=payV;
+        if(signed) kind=payV<0?"expense":"income";      // 1列に収支が混在
+        else if(impIsIncomeCat(rawCat)) kind="income";  // 費目名から収入と判断
+      }
+      if(amount==null||amount===0) return;
+      if(amount<0) amount=-amount;
+      amount=Math.round(amount);
+      const memo=String(m.memo>=0?(r[m.memo]||""):"").trim();
+      const category=impCategoryFor(rawCat,memo,kind);
+      const dup=E.some(x=>!x.deleted&&x.date===date&&x.amount===amount&&(x.memo||"")===memo);
+      out.push({date,memo,rawCat,amount,kind,category,guess:category,dup,include:!dup,file:f.name});
+    });
   });
+  out.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
   return out;
 }
+// 元データのカテゴリ名 → このアプリのカテゴリ名（同名優先→対応表→摘要から推測）
+function impCategoryFor(rawCat,memo,kind){
+  const cats=catsFor(kind);
+  if(rawCat){
+    if(cats.includes(rawCat)) return rawCat;
+    const mapped=CATMAP[rawCat];
+    if(mapped&&cats.includes(mapped)) return mapped;
+    const hit=guessCategory(rawCat,kind);
+    if(hit&&hit!=="その他雑費"&&hit!=="その他") return hit;
+  }
+  return guessCategory(memo,kind);
+}
+function impRawCats(){
+  const set=new Map(); // rawCat -> {kind,count}
+  (kImp&&kImp.rows||[]).forEach(r=>{
+    if(!r.rawCat) return;
+    const k=r.kind+" "+r.rawCat;
+    if(!set.has(k)) set.set(k,{raw:r.rawCat,kind:r.kind,n:0});
+    set.get(k).n++;
+  });
+  return [...set.values()].sort((a,b)=>b.n-a.n);
+}
 function csvCard(){
-  let html=`<div class="card"><h2>明細CSV取り込み</h2>
-    <p class="hint">カード会社・銀行の会員サイトでダウンロードした明細CSVをまとめて取り込めます（列の構成と文字コードは自動判定）。既に登録済みの明細と日付・金額・内容が一致する行は「重複?」として除外候補になります。</p>
-    <input type="file" id="csvFile" accept=".csv,text/csv,text/plain"></div>`;
-  if(kImportRows){
-    const inc=kImportRows.filter(r=>r.include).length;
-    html+=`<div class="card"><h2>取り込みプレビュー — ${kImportName.replace(/</g,"&lt;")}</h2>
-      <p class="hint">${kImportRows.length}件を検出しました。カテゴリは自動判定です。ここで変更するとルールとして学習し、次回から同じ店名は自動で振り分けます。</p>
-      <div style="margin-bottom:8px"><button class="btn ghost sm" id="csvAll">全選択</button> <button class="btn ghost sm" id="csvNone">全解除</button></div>
+  let html=`<div class="card"><h2>家計簿・明細の取り込み（CSV）</h2>
+    <p class="hint">これまで使っていた家計簿（Excel・スプレッドシート・家計簿アプリ）や、カード・銀行の明細CSVをまとめて取り込めます。文字コードと列の構成は自動判定し、あとから列を選び直せます。</p>
+    <input type="file" id="csvFile" accept=".csv,text/csv,text/plain" multiple>
+    <p class="mini" style="margin-top:8px">・Excel／スプレッドシートは「名前を付けて保存 → <b>CSV</b>」で書き出してください。<b>月ごとにシートが分かれている場合は、シートごとにCSVで保存して、ここで複数まとめて選べます</b>（Ctrlキーを押しながらクリック）。<br>
+    ・ファイル名に「2026年5月」「2026-05」などが入っていれば、日付欄が「12」のように<b>日だけ</b>でも自動で年月を補います。<br>
+    ・元の家計簿にカテゴリ（費目）の列があれば、それを引き継げます。</p></div>`;
+  if(kImp&&kImp.rows){
+    const rows=kImp.rows;
+    const inc=rows.filter(r=>r.include).length;
+    const m=kImp.map;
+    const header=(kImp.files[0].rows[m.header>=0?m.header:0]||[]);
+    const width=Math.max(...kImp.files.map(f=>Math.max(0,...f.rows.map(r=>r.length))));
+    const colOpts=(sel)=>{
+      let o=`<option value="-1"${sel<0?" selected":""}>（なし）</option>`;
+      for(let j=0;j<width;j++){
+        const nm=String(header[j]||"").trim();
+        o+=`<option value="${j}"${sel===j?" selected":""}>${(nm||`${j+1}列目`).replace(/</g,"&lt;")}</option>`;
+      }
+      return o;
+    };
+    const raws=impRawCats();
+    html+=`<div class="card"><h2>取り込みプレビュー</h2>
+      <p class="hint">${kImp.files.length}ファイル・${rows.length}件を検出しました。内容を確認して「取り込む」を押してください。日付・金額・内容が既存データと一致する行は「重複?」として除外されています。</p>
+      ${collapseCard("imp_map","列の対応（自動判定）","うまく読み取れていない場合はここで列を選び直してください。",`
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+          <div><label class="f">日付</label><select data-impmap="date">${colOpts(m.date)}</select></div>
+          <div><label class="f">支出の金額</label><select data-impmap="pay">${colOpts(m.pay)}</select></div>
+          <div><label class="f">収入の金額（別列のとき）</label><select data-impmap="income">${colOpts(m.income)}</select></div>
+          <div><label class="f">内容・店名</label><select data-impmap="memo">${colOpts(m.memo)}</select></div>
+          <div><label class="f">カテゴリ・費目</label><select data-impmap="cat">${colOpts(m.cat)}</select></div>
+        </div>
+        <p class="mini" style="margin-top:8px">※ 支出の列しかない家計簿では、金額がマイナスの行を収入として扱います。</p>
+        <div style="margin-top:10px"><b class="mini">ファイルごとの年月</b>（日付が「日」だけのときに使います）</div>
+        ${kImp.files.map((f,i)=>`<div class="seg"><span class="mini" style="min-width:130px;overflow:hidden;text-overflow:ellipsis">${f.name.replace(/</g,"&lt;")}</span>
+          <input type="month" data-impym="${i}" value="${f.ym||""}" style="width:150px">
+          <span class="mini">${f.rows.length}行</span></div>`).join("")}
+      `,false)}
+      ${raws.length?collapseCard("imp_cat","カテゴリの対応（${raws.length}種類）".replace("${raws.length}",raws.length),"元の家計簿の費目を、このアプリのカテゴリに割り当てます。ここで変えると次回以降も同じ割り当てになります。",`
+        ${raws.map(rc=>`<div class="seg"><span class="mini" style="min-width:120px">${rc.raw.replace(/</g,"&lt;")}<span style="color:var(--sub)">（${rc.n}件）</span></span>
+          <span class="mini">→</span>
+          <select data-impcat="${rc.kind} ${rc.raw}" style="width:150px">${catsFor(rc.kind).map(c=>`<option${c===impCategoryFor(rc.raw,"",rc.kind)?" selected":""}>${c}</option>`).join("")}</select>
+          <button class="btn ghost sm" data-impnew="${rc.kind} ${rc.raw}">この名前で新規作成</button></div>`).join("")}
+      `,false):""}
+      <div style="margin:10px 0 8px"><button class="btn ghost sm" id="csvAll">全選択</button> <button class="btn ghost sm" id="csvNone">全解除</button></div>
       <div class="tblwrap" style="max-height:340px;overflow-y:auto"><table class="data"><thead><tr><th>取込</th><th>日付</th><th>内容</th><th>金額</th><th>区分</th><th>カテゴリ</th></tr></thead><tbody>
-      ${kImportRows.map((r,i)=>`<tr>
+      ${rows.slice(0,300).map((r,i)=>`<tr>
         <td style="text-align:center"><input type="checkbox" data-ck="${i}"${r.include?" checked":""} style="width:auto"></td>
         <td>${r.date}</td>
-        <td style="text-align:left;max-width:220px;overflow:hidden;text-overflow:ellipsis">${r.memo.replace(/</g,"&lt;")}${r.dup?' <span style="color:var(--warn)">重複?</span>':""}</td>
+        <td style="text-align:left;max-width:200px;overflow:hidden;text-overflow:ellipsis">${(r.memo||r.rawCat||"").replace(/</g,"&lt;")}${r.dup?' <span style="color:var(--warn)">重複?</span>':""}</td>
         <td>${YEN(r.amount)}円</td>
-        <td>${r.kind==="income"?"収入":"支出"}</td>
+        <td><select data-kind="${i}"><option value="expense"${r.kind==="expense"?" selected":""}>支出</option><option value="income"${r.kind==="income"?" selected":""}>収入</option></select></td>
         <td><select data-cat="${i}">${catsFor(r.kind).map(c=>`<option${c===r.category?" selected":""}>${c}</option>`).join("")}</select></td>
       </tr>`).join("")}
       </tbody></table></div>
+      ${rows.length>300?`<p class="mini">※ 表示は先頭300件までですが、取り込みは選択した全${rows.length}件が対象です。</p>`:""}
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn" id="csvGo">選択した${inc}件を取り込む</button>
         <button class="btn ghost" id="csvCancel">キャンセル</button>
@@ -4792,31 +4919,67 @@ function csvCard(){
 function attachCsvHandlers(el){
   const f=el.querySelector("#csvFile");
   if(f) f.onchange=async e=>{
-    const file=e.target.files[0]; if(!file) return;
+    const files=[...(e.target.files||[])]; if(!files.length) return;
     try{
-      const buf=await file.arrayBuffer();
-      let text;
-      try{ text=new TextDecoder("utf-8",{fatal:true}).decode(buf); }
-      catch(err){ text=new TextDecoder("shift_jis").decode(buf); }
-      kImportRows=buildImportRows(parseCSV(text));
-      kImportName=file.name;
-      if(!kImportRows.length){ kImportRows=null; alert("明細行を検出できませんでした。CSVの1〜10行目に「日付」「金額」などの見出し行があるかご確認ください。"); }
+      const parsed=[];
+      for(const file of files){
+        const buf=await file.arrayBuffer();
+        let text;
+        try{ text=new TextDecoder("utf-8",{fatal:true}).decode(buf); }
+        catch(err){ text=new TextDecoder("shift_jis").decode(buf); }
+        const rows=parseCSV(text);
+        if(rows.length) parsed.push({name:file.name,rows,ym:ymFromName(file.name)});
+      }
+      if(!parsed.length){ alert("CSVを読み取れませんでした。"); return; }
+      // 列の対応は全ファイル共通。最もよく判定できたファイルの結果を採用する
+      const score=m=>(m.date>=0?2:0)+(m.pay>=0||m.income>=0?2:0)+(m.cat>=0?1:0)+(m.memo>=0?1:0);
+      let best=detectMapping(parsed[0].rows);
+      parsed.slice(1).forEach(f=>{ const m=detectMapping(f.rows); if(score(m)>score(best)) best=m; });
+      kImp={files:parsed, map:best, rows:null};
+      kImp.rows=impBuildRows();
+      if(!kImp.rows.length){
+        alert("明細行を検出できませんでした。取り込み画面の「列の対応」で、日付・金額の列を選び直してください。");
+      }
       render();
     }catch(err){ alert("読み込みエラー: "+(err.message||err)); }
   };
-  const all=el.querySelector("#csvAll"); if(all) all.onclick=()=>{ kImportRows.forEach(r=>r.include=true); render(); };
-  const none=el.querySelector("#csvNone"); if(none) none.onclick=()=>{ kImportRows.forEach(r=>r.include=false); render(); };
-  el.querySelectorAll("[data-ck]").forEach(c=>c.onchange=()=>{
-    kImportRows[+c.dataset.ck].include=c.checked;
-    const go=el.querySelector("#csvGo"); if(go) go.textContent=`選択した${kImportRows.filter(r=>r.include).length}件を取り込む`;
+  if(!kImp||!kImp.rows) return;
+  bindCollapse(el);
+  const rebuild=()=>{ kImp.rows=impBuildRows(); render(); };
+  el.querySelectorAll("[data-impmap]").forEach(s=>s.onchange=()=>{ kImp.map[s.dataset.impmap]=+s.value; rebuild(); });
+  el.querySelectorAll("[data-impym]").forEach(inp=>inp.onchange=()=>{ kImp.files[+inp.dataset.impym].ym=inp.value; rebuild(); });
+  el.querySelectorAll("[data-impcat]").forEach(s=>s.onchange=()=>{
+    const raw=s.dataset.impcat.split(" ")[1];
+    CATMAP[raw]=s.value; saveCatMap(); rebuild();
   });
-  el.querySelectorAll("[data-cat]").forEach(s=>s.onchange=()=>{ kImportRows[+s.dataset.cat].category=s.value; });
+  el.querySelectorAll("[data-impnew]").forEach(b=>b.onclick=()=>{
+    const [kind,raw]=b.dataset.impnew.split(" ");
+    const arr=kind==="income"?S.kakeibo.cats.income:S.kakeibo.cats.expense;
+    if(!arr.some(c=>c.name===raw)) arr.push(kind==="income"?{name:raw}:{name:raw,living:false,tier:"L2"});
+    CATMAP[raw]=raw; saveCatMap(); commit();
+  });
+  const all=el.querySelector("#csvAll"); if(all) all.onclick=()=>{ kImp.rows.forEach(r=>r.include=true); render(); };
+  const none=el.querySelector("#csvNone"); if(none) none.onclick=()=>{ kImp.rows.forEach(r=>r.include=false); render(); };
+  el.querySelectorAll("[data-ck]").forEach(c=>c.onchange=()=>{
+    kImp.rows[+c.dataset.ck].include=c.checked;
+    const go=el.querySelector("#csvGo"); if(go) go.textContent=`選択した${kImp.rows.filter(r=>r.include).length}件を取り込む`;
+  });
+  el.querySelectorAll("[data-cat]").forEach(s=>s.onchange=()=>{
+    const r=kImp.rows[+s.dataset.cat]; r.category=s.value;
+    if(r.rawCat){ CATMAP[r.rawCat]=s.value; saveCatMap(); }
+  });
+  el.querySelectorAll("[data-kind]").forEach(s=>s.onchange=()=>{
+    const r=kImp.rows[+s.dataset.kind]; r.kind=s.value;
+    r.category=impCategoryFor(r.rawCat,r.memo,r.kind); r.guess=r.category;
+    render();
+  });
   const go=el.querySelector("#csvGo");
   if(go) go.onclick=()=>{
-    const sel=kImportRows.filter(r=>r.include);
+    const sel=kImp.rows.filter(r=>r.include);
+    if(!sel.length){ alert("取り込む明細が選択されていません。"); return; }
     const now=new Date().toISOString();
     sel.forEach(r=>{
-      if(r.category!==r.guess && r.memo){
+      if(r.category!==r.guess && r.memo && !r.rawCat){
         RULES=RULES.filter(x=>x.kw!==r.memo);
         RULES.unshift({kw:r.memo,c:r.category});
       }
@@ -4824,12 +4987,12 @@ function attachCsvHandlers(el){
     });
     if(RULES.length>500) RULES=RULES.slice(0,500);
     saveRules(); saveEntries();
-    if(sel.length) kMonth=sel[0].date.slice(0,7);
-    kImportRows=null; render();
+    if(sel.length) kMonth=sel[sel.length-1].date.slice(0,7);
+    kImp=null; render();
     alert(sel.length+"件を取り込みました");
   };
   const cancel=el.querySelector("#csvCancel");
-  if(cancel) cancel.onclick=()=>{ kImportRows=null; render(); };
+  if(cancel) cancel.onclick=()=>{ kImp=null; render(); };
 }
 
 /* ---------- 設定タブ（Supabase同期） ---------- */
