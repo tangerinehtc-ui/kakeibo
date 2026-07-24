@@ -109,6 +109,11 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
   nav button{flex:1;text-align:center;padding:10px 2px;font-size:13px}
   main{padding-bottom:calc(90px + env(safe-area-inset-bottom,0px))}
   .brow{grid-template-columns:88px 92px 1fr;gap:6px}
+  /* スマホでは列指定（保険・電化製品・一時費用など）を解除して折り返す。
+     横にはみ出すと削除ボタン等が画面外に出てしまうため、!important で上書きする */
+  .itemrow{grid-template-columns:repeat(auto-fit,minmax(112px,1fr))!important}
+  .card .grid{grid-template-columns:repeat(auto-fit,minmax(112px,1fr))!important}
+  .itemrow input,.itemrow select,.card .grid input,.card .grid select{min-width:0}
 }
 .tl-row{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
 .tl-year{font-weight:600;text-align:center;color:var(--sub)}
@@ -245,7 +250,7 @@ details.help summary{cursor:pointer;color:var(--sub);font-size:13px}
 
 <script>
 "use strict";
-const APP_VERSION = "2026.07.20-29";
+const APP_VERSION = "2026.07.20-30";
 const MAN = v => (v==null||isNaN(v))?"0":Math.round(v).toLocaleString("ja-JP");
 
 /* ========================================================================
@@ -468,6 +473,9 @@ function save(){
   catch(e){ if(storageOK){ storageOK=false; showStorageWarning(); } }
 }
 function commit(){ S._updatedAt=new Date().toISOString(); save(); render(); scheduleSync(); }
+/* チェックボックス用: クリック処理が終わってから再描画する。
+   label内のcheckboxはchange中にDOMを差し替えると、2回押さないと反映されない等の不具合が出るため */
+function commitSoon(){ S._updatedAt=new Date().toISOString(); save(); setTimeout(()=>{ render(); scheduleSync(); },0); }
 function showStorageWarning(){
   if(document.getElementById("storageWarn")) return;
   const bar=document.createElement("div");
@@ -932,26 +940,34 @@ function computeCF(opt){
     const balance = incomeTotal-expenseTotal;
 
     // ----- 資産（投資は銘柄ごとに月次で複利・積立・取り崩し）-----
-    let contrib=0, withdraw=0;
+    // 積立は「その年に用意できる現金の範囲」まで。足りない年は自動で減額する
+    // （現金がないのに積み立てて、同じ年に取り崩す…という不整合を防ぐ）
+    const cashGain=Math.max(cash,0)*cashRate;
+    let planned=0;
+    iv.forEach(x=>{ const a=x.a; if(+a.monthly>0 && primAge<=(+a.accumEndAge||120)) planned+=(+a.monthly)*12; });
+    const affordable=Math.max(0, cash+cashGain+balance);
+    const cScale=planned>0?Math.min(1, affordable/planned):1;
+    let contrib=0, withdrawPlanned=0, withdrawForced=0;
     iv.forEach(x=>{
       const a=x.a, r=(+a.rate||0)/100/12;
+      const mo=(+a.monthly>0 && primAge<=(+a.accumEndAge||120))?(+a.monthly)*cScale:0;
       for(let m=0;m<12;m++){
         x.bal*=(1+r);
-        if(+a.monthly>0 && primAge<=(+a.accumEndAge||120)){ x.bal+=+a.monthly; contrib+=+a.monthly; }
+        if(mo>0){ x.bal+=mo; contrib+=mo; }
         if(+a.drawMonthly>0 && primAge>=(+a.drawStartAge||999) && x.bal>0){
-          const w=Math.min(+a.drawMonthly,x.bal); x.bal-=w; withdraw+=w;
+          const w=Math.min(+a.drawMonthly,x.bal); x.bal-=w; withdrawPlanned+=w;
           if(x.bal<=0.0005 && x.depleteYear==null) x.depleteYear=year;
         }
       }
     });
-    const cashGain=Math.max(cash,0)*cashRate;
+    let withdraw=withdrawPlanned;
     cash=cash+cashGain+balance-contrib+withdraw;
-    // 現金が不足したら投資から追加で取り崩す
+    // それでも現金が不足したら投資から追加で取り崩す（緊急の取り崩し）
     if(cash<0){
       for(const x of iv){
         if(cash>=0) break;
         const take=Math.min(-cash,x.bal);
-        if(take>0){ x.bal-=take; cash+=take; withdraw+=take; if(x.bal<=0.0005&&x.depleteYear==null) x.depleteYear=year; }
+        if(take>0){ x.bal-=take; cash+=take; withdrawForced+=take; withdraw+=take; if(x.bal<=0.0005&&x.depleteYear==null) x.depleteYear=year; }
       }
     }
     // 節約分を投資に回す場合：浮いた現金を積立に移し、月次で複利運用（現金がある範囲だけ）
@@ -969,7 +985,7 @@ function computeCF(opt){
       living, housing, education:cat["教育・結婚資金"], car:cat["車両費"],
       other_exp:cat["その他・将来の夢"], appliance, tax, insurance:cat["支払保険料"], deduct, survivorPen, disBen,
       saving:saveCut, svBal,
-      expenseTotal, balance, contrib, withdraw, cash, invest, netWorth
+      expenseTotal, balance, contrib, withdraw, withdrawPlanned, withdrawForced, cash, invest, netWorth
     });
   }
   const assetInfo=iv.map(x=>({id:x.a.id,name:x.a.name,depleteYear:x.depleteYear,finalBal:x.bal}));
@@ -1624,6 +1640,16 @@ function renderIncome(){
       const p1=famLeavePlan([lv]);
       const benTotal=Object.values(p1.ben).reduce((s,o)=>s+Object.values(o).reduce((a,b)=>a+b,0),0);
       const leaveMonths=(lv.maternity?LEAVE_RATES.matMonths:0)+(+lv.months||0);
+      // 給付が0のときは理由を出す（原因が分からないと直せないため）
+      const baseM=c?grossSalaryAt(lv.memberId,c.birthYear)/12:0;
+      const lastYear=c?c.birthYear+Math.ceil((leaveMonths+(+lv.shortYears||0)*12)/12)-1:0;
+      let why="";
+      if(benTotal<=0){
+        if(leaveMonths<=0) why="育休の月数を入れる（または産休にチェック）と給付が計算されます。";
+        else if(lv.salaried===false) why="「会社員・公務員（給付あり）」のチェックが外れているため、給付は0です（収入の減少だけ反映）。";
+        else if(baseM<=0) why=`${c?c.name+"が生まれる"+c.birthYear+"年":"その年"}に${m?m.name:""}の給与が登録されていないため、給付を計算できません。上の「収入」で給与の折れ線を確認してください。`;
+      }
+      const pastWarn=(c&&lastYear<S.baseYear)?`この期間（${c.birthYear}〜${lastYear}年）は基準年 ${S.baseYear}年より前のため、キャッシュフローには反映されません。`:"";
       d.innerHTML=`
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
           <span class="tag">産休・育休</span>
@@ -1640,11 +1666,13 @@ function renderIncome(){
           <label style="display:flex;gap:6px;align-items:center;font-size:13px;color:var(--sub)"><input type="checkbox" data-k="maternity" ${lv.maternity?"checked":""} style="width:auto"> 産休あり（出産する本人）</label>
           <label style="display:flex;gap:6px;align-items:center;font-size:13px;color:var(--sub)"><input type="checkbox" data-k="salaried" ${lv.salaried!==false?"checked":""} style="width:auto"> 会社員・公務員（給付あり）</label>
         </div>
-        <p class="mini" style="margin-top:8px">${c?`${c.birthYear}年〜: 休業 約${leaveMonths.toFixed(1)}ヶ月${(+lv.shortYears||0)>0?`＋時短${lv.shortYears}年（収入${lv.shortPct==null?100:lv.shortPct}%）`:""}。給付の合計 <b style="color:var(--pos)">約${MAN(benTotal)}万円</b>（非課税）`:""}</p>`;
+        <p class="mini" style="margin-top:8px">${c?`${c.birthYear}年〜: 休業 約${leaveMonths.toFixed(1)}ヶ月${(+lv.shortYears||0)>0?`＋時短${lv.shortYears}年（収入${lv.shortPct==null?100:lv.shortPct}%）`:""}。給付の合計 <b style="color:var(--pos)">約${MAN(benTotal)}万円</b>（非課税）`:""}</p>
+        ${why?`<p class="mini" style="color:var(--warn)">💡 ${why}</p>`:""}
+        ${pastWarn?`<p class="mini" style="color:var(--warn)">⚠ ${pastWarn}</p>`:""}`;
       d.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
         const k=inp.dataset.k;
-        if(k==="maternity"||k==="salaried") lv[k]=e.target.checked;
-        else if(k==="memberId"||k==="childId") lv[k]=e.target.value;
+        if(k==="maternity"||k==="salaried"){ lv[k]=e.target.checked; commitSoon(); return; }
+        if(k==="memberId"||k==="childId") lv[k]=e.target.value;
         else lv[k]=Math.max(0,+e.target.value||0);
         commit();
       });
@@ -1978,8 +2006,8 @@ function renderHousing(box){
     rl.appendChild(row);
   });
   box.querySelector("#addRent").onclick=()=>{h.rent.push({fromYear:S.baseYear,toYear:S.baseYear+1,monthly:8});commit();};
-  box.querySelector("#loanOn").onchange=e=>{loan.on=e.target.checked;commit();};
-  box.querySelector("#dedOn").onchange=e=>{loan.deductOn=e.target.checked;commit();};
+  box.querySelector("#loanOn").onchange=e=>{loan.on=e.target.checked;commitSoon();};
+  box.querySelector("#dedOn").onchange=e=>{loan.deductOn=e.target.checked;commitSoon();};
   [["l_principal","principal"],["l_rate","rate"],["l_term","termYears"],["l_start","startYear"],["d_years","deductYears"],["d_rate","deductRate"],["d_cap","deductCap"],["l_rate2","rate2"],["l_rate2From","rate2From"],["l_rate3","rate3"],["l_rate3From","rate3From"]].forEach(([id,k])=>{
     const inp=box.querySelector("#"+id); if(inp) inp.onchange=e=>{loan[k]=+e.target.value;commit();};
   });
@@ -2184,6 +2212,7 @@ function renderCF(opt,scen){
     ["支出合計","expenseTotal","tot"],
     ["収支差額","balance","bal"],
     ["投資への積立","contrib","ex"],["投資の取り崩し","withdraw","in"],
+    ...(rows.some(r=>r.withdrawForced>0.005)?[["　うち現金不足による取り崩し",r=>r.withdrawForced||0,"sub"]]:[]),
     ["現金残高","cash","net"],["投資残高","invest","net"],["資産合計","netWorth","net"]
   ];
   let head=`<tr><th>項目 ＼ 年</th>`+rows.map(r=>`<th class="${r.netWorth<0?"negyear":""}">${r.year}<br><span class="mini">${r.primAge}歳</span></th>`).join("")+`</tr>`;
@@ -2933,7 +2962,16 @@ function collectTimelineEvents(cf,scen){
     if(!by||+ap.price<10) return;
     for(let y=by+ly;y<=lastYear;y+=ly){ if(y>=S.baseYear) add(y,`${ap.name}買替 ${MAN(ap.price)}万`); }
   });
-  // 投資枯渇
+  // 投資の取り崩し開始・枯渇
+  const primM=prim;
+  (S.assets||[]).forEach(a=>{
+    if(a.type!=="invest"||!(+a.drawMonthly>0)) return;
+    const y=primM.birthYear+(+a.drawStartAge||65);
+    if(y>=S.baseYear) add(y,`投資「${a.name}」取り崩し開始（月${+a.drawMonthly||0}万円）`);
+  });
+  // 現金が足りず投資を取り崩し始めた年（計画的な取り崩しとは区別）
+  const forced=rows.find(r=>r.withdrawForced>0.005);
+  if(forced) add(forced.year,`現金不足で投資を取り崩し（${MAN(forced.withdrawForced)}万）`);
   (assetInfo||[]).forEach(x=>{ if(x.depleteYear) add(x.depleteYear,`投資「${x.name}」枯渇`); });
   return evByYear;
 }
@@ -3097,7 +3135,7 @@ function renderEmgDeath(){
     ・団信ONの場合、住宅ローンの返済は想定年以降ゼロになります（住宅ローン控除も終了）。<br>
     ・実際の受給額は加入状況により異なります。正確な金額は年金事務所・保険会社にご確認ください。</p></details>
   </div>`;
-  const bind=(id,fn)=>{ const x=document.getElementById(id); if(x) x.onchange=e=>{ fn(e); commit(); }; };
+  const bind=(id,fn)=>{ const x=document.getElementById(id); if(x) x.onchange=e=>{ fn(e); (x.type==="checkbox"?commitSoon:commit)(); }; };
   bind("emTarget",e=>{ em.target=e.target.value; });
   bind("emYear",e=>{ em.year=Math.max(S.baseYear,+e.target.value||year); });
   bind("emIns",e=>{ em.ins[target.id]=Math.max(0,+e.target.value||0); });
@@ -3182,7 +3220,7 @@ function renderEmgSick(){
     ・傷病手当金: 会社員・公務員が対象。休業中は給与の約2/3が支給されるとして、減少分＝1/3で計算します。<br>
     ・民間保険の給付は「保険」タブの登録内容（入院日額×日数＋手術一時金、がんは診断一時金）から自動計算します。</p></details>
   </div>`;
-  const bind=(id,fn)=>{ const x=document.getElementById(id); if(x) x.onchange=e=>{ fn(e); commit(); }; };
+  const bind=(id,fn)=>{ const x=document.getElementById(id); if(x) x.onchange=e=>{ fn(e); (x.type==="checkbox"?commitSoon:commit)(); }; };
   bind("skTarget",e=>{ sk.target=e.target.value; });
   bind("skCost",e=>{ sk.cost=Math.max(0,+e.target.value||0); });
   bind("skDays",e=>{ sk.days=Math.max(1,+e.target.value||1); });
@@ -3255,7 +3293,7 @@ function renderEmgDisable(){
     ・就業不能保険は「保険」タブの登録（月額給付・免責期間・保障年齢）を反映します。<br>
     ・生活費・住宅費などの支出は今まで通り続く前提です（障害の状態によっては介護費用などが追加でかかる場合があります）。</p></details>
   </div>`;
-  const bind=(id,fn)=>{ const x=document.getElementById(id); if(x) x.onchange=e=>{ fn(e); commit(); }; };
+  const bind=(id,fn)=>{ const x=document.getElementById(id); if(x) x.onchange=e=>{ fn(e); (x.type==="checkbox"?commitSoon:commit)(); }; };
   bind("ddTarget",e=>{ dd.target=e.target.value; });
   bind("ddYear",e=>{ dd.year=Math.max(S.baseYear,+e.target.value||year); });
   bind("ddSalaried",e=>{ dd.salaried=e.target.checked; });
@@ -4315,8 +4353,8 @@ function renderKSave(){
       </div>`;
     d.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
       const k=inp.dataset.k;
-      if(k==="on") it.on=e.target.checked;
-      else if(k==="name") it.name=e.target.value;
+      if(k==="on"){ it.on=e.target.checked; commitSoon(); return; }
+      if(k==="name") it.name=e.target.value;
       else if(k==="kind"){ it.kind=e.target.value; if(it.kind==="cancel") it.after=0; }
       else if(k==="simPreset"){ if(e.target.value!==""){ it.after=+e.target.value; } }
       else it[k]=+e.target.value;
@@ -4387,7 +4425,7 @@ function renderKSave(){
   const sdMail=document.getElementById("sdMail");
   if(sdMail) sdMail.onchange=e=>{ diag.mailNeed=e.target.value==="1"; commit(); };
   const sdFamily=document.getElementById("sdFamily");
-  if(sdFamily) sdFamily.onchange=e=>{ diag.familyUsing=e.target.checked; commit(); };
+  if(sdFamily) sdFamily.onchange=e=>{ diag.familyUsing=e.target.checked; commitSoon(); };
   const sdReflect=document.getElementById("sdReflect");
   if(sdReflect) sdReflect.onclick=()=>{
     if(!simBest||simSave<=0) return;
@@ -4471,8 +4509,8 @@ function renderKManage(){
       </div>`;
     d.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
       const k=inp.dataset.k;
-      if(k==="active") f[k]=e.target.checked;
-      else if(k==="name"||k==="category"||k==="startYM"||k==="endYM") f[k]=e.target.value;
+      if(k==="active"){ f[k]=e.target.checked; commitSoon(); return; }
+      if(k==="name"||k==="category"||k==="startYM"||k==="endYM") f[k]=e.target.value;
       else f[k]=+e.target.value;
       commit();
     });
@@ -4501,8 +4539,8 @@ function renderKManage(){
         <span class="mini">${E.filter(x=>!x.deleted&&x.category===c.name).length}件</span>
         <button class="btn danger sm">×</button>`;
       r.querySelectorAll("[data-k]").forEach(inp=>inp.onchange=e=>{
-        if(inp.dataset.k==="living") c.living=e.target.checked;
-        else if(inp.dataset.k==="tier") c.tier=e.target.value;
+        if(inp.dataset.k==="living"){ c.living=e.target.checked; commitSoon(); return; }
+        if(inp.dataset.k==="tier") c.tier=e.target.value;
         else if(inp.dataset.k==="target"){
           const v=Math.max(0,+e.target.value||0);
           if(v>0) S.kakeibo.budget.perCat[c.name]=v; else delete S.kakeibo.budget.perCat[c.name];
